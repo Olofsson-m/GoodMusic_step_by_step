@@ -2,6 +2,7 @@
 using Configuration.Extensions;
 using DbContext.Extensions;
 using DbRepos;
+using Models.Authorization;
 using Encryption.Extensions;
 using Microsoft.Extensions.Options;
 using Configuration.Options;
@@ -20,6 +21,15 @@ builder.Services.AddUserBasedDbContext();
 builder.Services.AddVersionInfo();
 builder.Services.AddEnvironmentInfo();
 
+//Add IdentityServices to DbContext.MainDbContext
+builder.Services.AddDefaultIdentity<User>(options => {
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.SignIn.RequireConfirmedAccount = false;
+}).AddEntityFrameworkStores<DbContext.MainDbContext>();
+
 #region Injecting a dependency service to read MusicWebApi
 builder.Services.AddHttpClient(name: "MusicWebApi", configureClient: options =>
 {
@@ -29,7 +39,6 @@ builder.Services.AddHttpClient(name: "MusicWebApi", configureClient: options =>
             mediaType: "application/json",
             quality: 1.0));
 });
-
 
 //Inject DbRepos and Services
 builder.Services.AddScoped<AdminDbRepos>();

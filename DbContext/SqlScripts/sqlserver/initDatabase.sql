@@ -43,34 +43,6 @@ AS
     SELECT * FROM gstusr.vwInfoDb;
 GO
 
---create-gstusr-login.sql
-CREATE OR ALTER PROC gstusr.spLogin
-    @UserNameOrEmail NVARCHAR(100),
-    @UserPassword NVARCHAR(200),
-
-    @UserId UNIQUEIDENTIFIER OUTPUT,
-    @UserName NVARCHAR(100) OUTPUT,
-    @UserRole NVARCHAR(100) OUTPUT
-    
-    AS
-
-    SET NOCOUNT ON;
-    
-    SET @UserId = NULL;
-    SET @UserName = NULL;
-    SET @UserRole = NULL;
-    
-    SELECT Top 1 @UserId = UserId, @UserName = UserName, @UserRole = UserRole FROM dbo.Users 
-    WHERE ((UserName = @UserNameOrEmail) OR
-           (Email IS NOT NULL AND (Email = @UserNameOrEmail))) AND ([PasswordHash] = @UserPassword);
-
-    IF (@UserId IS NULL)
-    BEGIN
-        ;THROW 999999, 'Login error: wrong user or password', 1
-    END
-
-GO
-
 -- User and role management in sqlserver
 -- Create logins
 IF SUSER_ID (N'gstusr') IS NULL

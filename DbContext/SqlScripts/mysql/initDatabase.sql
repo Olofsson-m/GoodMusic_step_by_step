@@ -37,30 +37,6 @@ BEGIN
     SELECT * FROM gstusr_vwInfoDb;
 END$$
 
-/* Create Login procedure with supUser privilages */
-CREATE OR REPLACE DEFINER='dbo'@'%' PROCEDURE gstusr_spLogin(
-    IN UserNameOrEmail VARCHAR(100),
-    IN UserPassword VARCHAR(200),
-    OUT UserId CHAR(36),
-    OUT UserName VARCHAR(100),
-    OUT UserRole VARCHAR(100)
-)
-BEGIN
-    SET UserId = NULL;
-    SET UserName = NULL;
-    SET UserRole = NULL;
-
-    SELECT u.UserId, u.UserName, u.UserRole INTO UserId, UserName, UserRole
-    FROM `sql-music`.dbo_Users u
-    WHERE (u.UserName = UserNameOrEmail OR (u.Email IS NOT NULL AND u.Email = UserNameOrEmail))
-      AND u.PasswordHash = UserPassword
-    LIMIT 1;
-
-    IF UserId IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Login error: wrong user or password';
-    END IF;
-END$$
-
 DELIMITER ;
 
 /* User and role management in MariaDB */

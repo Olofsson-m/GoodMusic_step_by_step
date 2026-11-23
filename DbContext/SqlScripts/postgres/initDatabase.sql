@@ -39,36 +39,6 @@ BEGIN
 END;
 $$;
 
--- Create Login function
-CREATE OR REPLACE FUNCTION gstusr."spLogin"(
-    usernameoremail VARCHAR(100),
-    userpasswordhash VARCHAR(200),
-    OUT userid UUID,
-    OUT username VARCHAR(100),
-    OUT userrole VARCHAR(100)
-)
-RETURNS RECORD
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-    userid := NULL;
-    username := NULL;
-    userrole := NULL;
-
-    SELECT u."UserId", u."UserName", u."UserRole" 
-    INTO userid, username, userrole
-    FROM dbo."Users" u
-    WHERE (u."UserName" = usernameoremail OR (u."Email" IS NOT NULL AND u."Email" = usernameoremail))
-      AND u."PasswordHash" = userpasswordhash
-    LIMIT 1;
-
-    IF userid IS NULL THEN
-        RAISE EXCEPTION 'Login error: wrong user or password';
-    END IF;
-END;
-$$;
-
 
 -- User and role management in PostgreSQL
 -- Create roles (PostgreSQL roles are both users and groups)

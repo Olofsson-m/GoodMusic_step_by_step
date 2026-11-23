@@ -53,13 +53,13 @@
                                 <div class="col-md-2 themed-grid-col">
                                     <a asp-controller="Group" asp-action="EditGroup" asp-route-id="@item.MusicGroupId" class="btn btn-secondary btn-sm m-1" type="button">Edit</a>
 
-                                    <!-- Button to trigger modal confirmation with modal in the form tag -->
-                                    <button type="button" class="btn btn-danger btn-sm m-1" data-bs-toggle="modal" data-bs-target="#delModal"
-                                            data-seido-modal-body="@item.Name is about to be deleted."
-                                            data-seido-selected-item-id="@item.MusicGroupId">
-                                        Del
-                                    </button>
-                                </div>
+                                <!-- Button to trigger modal confirmation with modal in the form tag -->
+                                <button type="button" class="btn btn-danger btn-sm m-1" data-bs-toggle="modal" data-bs-target="#delModal"
+                                        data-seido-modal-body="@item.Name is about to be deleted."
+                                        data-seido-selected-item-id="@item.MusicGroupId">
+                                    Del
+                                </button>
+                            </div>
                         }
                         <nav aria-label="Standard pagination example">
                             <ul class="pagination">
