@@ -1,117 +1,96 @@
 # AppMvc explanations
 
 `AppMvc` is the ASP.NET Core **MVC** front-end of the GoodMusic solution (.NET 10). Pages are rendered on the server with Razor views; controllers handle requests and call the shared service layer (`Services` → `DbRepos` → `DbContext` → database).
-This document describes the code as it is in branch **`8-list-pagination`**, with the emphasis on what this branch adds compared with the previous branch, `7-data-list`.
+This document describes the code as it is in branch **`9-view-list-item`**, with the emphasis on what this branch adds compared with the previous branch, `8-list-pagination`.
 
 ---
 
-## 1. This branch: Pagination of the group list (compared with `7-data-list`)
+## 1. This branch: Detail view of a music group (compared with `8-list-pagination`)
 
 ### Purpose
-The previous branch listed *all* music groups on one page by reading the whole table. This branch changes the list so that only **one page of 10 groups** is read from the database and shown at a time, with **page links** (« 1 2 3 … » ) to move between pages. Paging keeps the page small and the database work bounded however many groups exist.
+The paged list showed only the *names* of the groups. This branch adds a **detail page for one group** – name, genre, established year, its **artists** and its **albums** – and turns each name in the list into a **link** to that page. It is the first page that works on a single item identified by its id.
 
 ### Differences at a glance
 
 | File | Previous branch | This branch |
 |---|---|---|
-| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups()` – two service calls, reads all rows | `ListOfGroups(int pagenr)` – **one** service call, reads one page, calls `vm.UpdatePagination(...)` |
-| [ViewModels/ListOfGroups.cs](AppMvc/ViewModels/ListOfGroups.cs) | `UseSeeds`, `MusicGroups`, `NrOfGroups` | + **pagination state** (`PageSize`, `ThisPageNr`, `PrevPageNr`, `NextPageNr`, `NrOfPages`, `NrVisiblePages`) and `UpdatePagination(...)` |
-| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | loop over the groups | loop over the groups **+ a Bootstrap pagination bar** |
+| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups(int pagenr)` | + **`ViewGroup(Guid id)`** action |
+| [ViewModels/ViewGroup.cs](AppMvc/ViewModels/ViewGroup.cs) | – | **new** view model (one property: `IMusicGroup MusicGroup`) |
+| [Views/Group/ViewGroup.cshtml](AppMvc/Views/Group/ViewGroup.cshtml) | – | **new** read-only detail view |
+| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | group names as plain text | each name is a **link** `asp-controller="Group" asp-action="ViewGroup" asp-route-id="@item.MusicGroupId"` |
 
-`Program.cs`, the layout and the service layer are unchanged: the service call already had `pageNumber` and `pageSize` parameters, which the previous branch only used to fetch "everything". The URL is now `/Group/ListOfGroups?pagenr=N` (or `/Group/ListOfGroups/…` via the default route; the page number is a query-string value).
+`Program.cs`, the layout and the service layer are unchanged. The detail page is not in the menu; it is reached only by clicking a group in the list.
 
 ### Request flow
 
 ```
-Browser ──GET /Group/ListOfGroups?pagenr=3──► GroupController.ListOfGroups(int pagenr)
-   │                                            │ vm = new ListOfGroups { ThisPageNr = 3 }
-   │                                            │ ReadMusicGroupsAsync(seeded: true, flat: false, filter: null, pageNumber: 3, pageSize: 10)
-   │                                            ▼
-   │                                         MusicGroupsDbRepos: count query + page query
-   │                                            │   SELECT COUNT(*) …                      → DbItemsCount (all matching rows)
-   │                                            │   … ORDER … OFFSET 30 ROWS FETCH 10 …    → PageItems (rows 31–40)
-   │                                            ▼
-   │                                         vm.MusicGroups = PageItems; vm.NrOfGroups = DbItemsCount
-   │                                         vm.UpdatePagination(DbItemsCount)   → NrOfPages, PrevPageNr, NextPageNr, NrVisiblePages
-   ◄── HTML: 10 names + pagination bar ───── View(vm)
+Browser ──click "The Floyd …" in the list──► GET /Group/ViewGroup/9ad6a0fb-…   (also works as /Group/ViewGroup?id=9ad6a0fb-…)
+   │                                           ▼
+   │                                      GroupController.ViewGroup(Guid id)
+   │                                           │ _mg_service.ReadMusicGroupAsync(id, flat: false)
+   │                                           ▼
+   │                                      MusicGroupsServiceDb ── 1:1 ──► MusicGroupsDbRepos.ReadMusicGroupAsync(id, false)
+   │                                           │ _dbContext.MusicGroups.AsNoTracking()
+   │                                           │     .Include(ArtistsDbM).Include(AlbumsDbM).Where(MusicGroupId == id).FirstOrDefaultAsync()
+   │                                           ▼
+   │                                      ResponseItemDto<IMusicGroup>.Item  (group + artists + albums)
+   │                                      vm = new ViewGroup { MusicGroup = Item }  → View(vm)
+   ◄── HTML (Views/Group/ViewGroup.cshtml inside _Layout.cshtml) ──┘
 ```
+
+### The link in the list
+```cshtml
+<a asp-controller="Group" asp-action="ViewGroup" asp-route-id="@item.MusicGroupId">@item.Name</a>
+```
+The anchor tag helper builds the URL from the controller/action names and route values. Because the default route is `{controller=Home}/{action=Index}/{id?}`, the **`id` route value becomes a URL segment**: `/Group/ViewGroup/9ad6a0fb-27b9-4062-9e6e-00ad03ec77a0`. This is a plain GET link – bookmarkable and shareable.
 
 ### The controller action
 ```csharp
-public async Task<IActionResult> ListOfGroups(int pagenr)
+public async Task<IActionResult> ViewGroup(Guid id)
 {
-    var vm = new ListOfGroups() { ThisPageNr = pagenr };
-
-    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, null, vm.ThisPageNr, vm.PageSize);
-    vm.MusicGroups = _resp.PageItems;
-    vm.NrOfGroups = _resp.DbItemsCount;
-
-    vm.UpdatePagination(_resp.DbItemsCount);
+    Guid _groupId = id;
+    var mg = await _mg_service.ReadMusicGroupAsync(_groupId, false);
+    var vm = new ViewGroup() { MusicGroup = mg.Item };
     return View(vm);
 }
 ```
-- **Parameter binding:** `int pagenr` is bound by MVC from the query string (`?pagenr=3`). If the parameter is missing, the default `0` is used, so `/Group/ListOfGroups` shows the first page. (The page number is **zero-based** in URLs and in the service; the view displays it as `pagenr + 1`.)
-- **One request, one page:** the previous version needed two service calls (one to learn the count, one to read everything). The repo already returns both in the same response: `PageItems` (the requested page) and `DbItemsCount` (the total number of matching rows). Now a single call is enough, and only `PageSize` (10) groups – with their albums and artists – are loaded.
-- **Where paging happens:** in the database. The repo applies `Skip(pageNumber * pageSize).Take(pageSize)` to the EF Core query, so only the 10 rows are transferred; a separate `CountAsync()` gives the total used for the page links.
-- **Separation of concerns:** the controller only passes the numbers; the arithmetic for the page links lives in the view model.
+- **Model binding of the id:** the action parameter `Guid id` is bound from the route segment (`/Group/ViewGroup/<guid>`) or from the query string (`?id=<guid>`) – both work. The `{id?}` part of the default route is what the segment form relies on. The commented-out line in the code shows the manual alternative, `Guid.Parse(Request.Query["id"])`.
+- **Full object graph:** `flat: false` makes the repo load the group **together with its artists and albums** (`.Include(...)`), which is exactly what the page needs. With `flat: true` only the group's own columns would be read and the artist and album lists would be empty.
+- **Read-only query:** the repo uses `AsNoTracking()`, since nothing is going to be modified; this is cheaper and avoids circular-reference problems when entities reference each other (group ↔ artists).
+- **Interface-typed result:** the service returns `IMusicGroup` (from the `Models` project) with `Name`, `Genre`, `EstablishedYear`, `Albums` and `Artists`, so the web app never touches the EF entity classes.
+- **Naming:** the action is called `ViewGroup`, as is the view model class; inside the controller `ViewGroup` as a *type* (in `new ViewGroup()`) and as a *method name* coexist without conflict.
+- The injected `IAlbumsService` and `IArtistsService` are not needed here – the albums and artists come with the group.
 
-### The view model – pagination logic
+### The view model
 ```csharp
-public int NrOfPages { get; set; }
-public int PageSize { get; } = 10;
-public int ThisPageNr { get; set; } = 0;
-public int PrevPageNr { get; set; } = 0;
-public int NextPageNr { get; set; } = 0;
-public int NrVisiblePages { get; set; } = 0;
-
-public void UpdatePagination(int nrOfItems)
-{
-    NrOfPages      = (int)Math.Ceiling((double)nrOfItems / PageSize);
-    PrevPageNr     = Math.Max(0, ThisPageNr - 1);
-    NextPageNr     = Math.Min(NrOfPages - 1, ThisPageNr + 1);
-    NrVisiblePages = Math.Min(10, NrOfPages);
-}
+public class ViewGroup { public IMusicGroup MusicGroup { get; set; } }
 ```
-| Property | Meaning | Example with 100 groups, on page index 3 |
-|---|---|---|
-| `PageSize` | rows per page (read-only, 10) | 10 |
-| `ThisPageNr` | zero-based index of the page being shown (set by the controller from `pagenr`) | 3 |
-| `NrOfPages` | `ceil(total / PageSize)` | 10 |
-| `PrevPageNr` | previous page, never below 0 | 2 |
-| `NextPageNr` | next page, never above the last page (`NrOfPages - 1`) | 4 |
-| `NrVisiblePages` | how many numbered links to render, at most 10 | 10 |
+A thin wrapper in `ViewModels/`, following the same MVVM pattern as the other pages: the view depends only on this type. Here it simply exposes the whole `IMusicGroup`, because the page is a faithful read-only presentation of that object.
 
-The `Math.Max`/`Math.Min` clamping means « on the first page and » on the last page link to the same page instead of to a non-existing one. Keeping this logic in the view model (instead of in the view) makes it testable and keeps the Razor view free of arithmetic.
+### The view
+[Views/Group/ViewGroup.cshtml](AppMvc/Views/Group/ViewGroup.cshtml) is typed with `@model ViewGroup`, title *View group*. It has three sections, all inside a `<form class="needs-validation" novalidate>`:
+1. **Group details** – three `<input type="text" class="form-control" … readonly>` fields with the group's **name**, **genre** and **established year** (`value="@Model.MusicGroup.Name"` etc.). `readonly` shows the values in form-control styling but prevents editing; this layout is reused as the basis for an edit form.
+2. **Artists** – a heading and a grid with a header cell *Name*, then a `foreach` over `Model.MusicGroup.Artists` that prints `@item.FirstName @item.LastName` in a `themed-grid-col` cell.
+3. **Albums** – a grid with header cells *Name* and *Release Year*, then a `foreach` over `Model.MusicGroup.Albums` printing `@item.Name` (`col-md-10`) and `@item.ReleaseYear` (`col-md-2`).
 
-### The view – the pagination bar
-Inside the `@if (Model.MusicGroups is not null)` block, after the list of names:
-```cshtml
-<nav aria-label="Standard pagination example">
-  <ul class="pagination">
-    <li class="page-item"><a class="page-link" asp-controller="Group" asp-action="ListOfGroups" asp-route-pagenr="@Model.PrevPageNr" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a></li>
-    @for (int i = 0; i < Model.NrVisiblePages; i++)
-    {
-      <li class="page-item"><a class="page-link" asp-controller="Group" asp-action="ListOfGroups" asp-route-pagenr="@i">@(i + 1)</a></li>
-    }
-    <li class="page-item"><a class="page-link" asp-controller="Group" asp-action="ListOfGroups" asp-route-pagenr="@Model.NextPageNr" aria-label="Next"><span aria-hidden="true">&raquo;</span></a></li>
-  </ul>
-</nav>
-```
-- It uses Bootstrap's *pagination* component (`nav` > `ul.pagination` > `li.page-item` > `a.page-link`); the `aria-label`s make the previous/next arrows understandable to screen readers.
-- **Links are generated, not hand-written:** `asp-controller`, `asp-action` and `asp-route-pagenr` make the anchor tag helper build `/Group/ListOfGroups?pagenr=N` through the routing system. Because `pagenr` is not part of the route pattern, it is appended as a query-string value.
-- The numbered links are produced by a `for` loop from `0` to `NrVisiblePages - 1`, labelled `i + 1` (users see 1-based numbers, the URL is zero-based).
-- Each page request is a normal **GET** link – no form post, no antiforgery token, and the page can be bookmarked, shared and navigated with the browser's back button.
+Notes:
+- Bootstrap grid classes (`row`, `col-sm-6`, `col-md-10`, `col-md-2`, `g-3`) lay the page out responsively; `themed-grid-head-col` / `themed-grid-col` come from `wwwroot/css/grid.css`.
+- Razor HTML-encodes all values (including inside the `value="…"` attributes), so data from the database cannot inject markup.
+- The `<form>` has no action, method or inputs that post anything; it is only a container for Bootstrap's form styling. There is nothing to submit and therefore no antiforgery handling is needed on this page.
+- `<label for="…">` is connected to each input via `id`, which is good for accessibility.
 
-### Behaviour and limitations to be aware of
-- **No "current page" highlight:** the markup has no `active` class on the current page's `page-item`, and the « / » items are never `disabled`. Adding `class="page-item @(i == Model.ThisPageNr ? "active" : "")"` would show the current page.
-- **Only the first 10 pages are numbered:** `NrVisiblePages = min(10, NrOfPages)`; with more than 100 groups, pages beyond the 10th can only be reached with ». A sliding window around `ThisPageNr` would be the next refinement.
-- **Out-of-range page numbers:** `?pagenr=10` or `99` with 100 groups gives an empty list (still HTTP 200, with the pagination bar). A **negative** value (`?pagenr=-1`) is not validated and makes the database query fail (HTTP 500, because `Skip` gets a negative number). Clamping `pagenr` in the controller (`Math.Max(0, pagenr)`) would harden this.
-- **Empty database:** `NrOfPages` is 0, so the « and » links get `pagenr=-1`; the same validation would cover this case.
-- `NrOfGroups` is stored in the view model (total count) but not displayed yet.
+### Error behaviour (verified)
+| Request | Result |
+|---|---|
+| `/Group/ViewGroup/<existing guid>` or `?id=<existing guid>` | 200 – details shown |
+| `/Group/ViewGroup/<well-formed guid that does not exist>` | **500** – the repo throws `ArgumentException("Item … is not existing")` |
+| `/Group/ViewGroup` (no id) or a malformed id (`not-a-guid`) | **500** – `id` becomes `Guid.Empty`, which does not exist |
+
+Outside Development, such exceptions are routed to `/Home/Error` (`UseExceptionHandler`), but a friendlier result would be `NotFound()` when the item does not exist (e.g. by catching the exception or checking for it in the action).
 
 ### Trying it
-1. Make sure the database holds more than 10 seeded groups (use **Seed**, default 100).
-2. Open **Famous groups** – 10 names and the bar `« 1 2 … 10 »` are shown. Click a number or the arrows to move between pages; watch the URL change (`?pagenr=…`).
+1. Open **Famous groups** and click a group name.
+2. The detail page shows name, genre and year plus the group's artists and albums; use the browser's back button to return to the same list page.
 
 ---
 
@@ -127,14 +106,14 @@ AppMvc/
 ├── Controllers/
 │   ├── HomeController.cs         Index, DataSourceInfo, Error
 │   ├── SeedController.cs         Seed (GET/POST)
-│   └── GroupController.cs        ListOfGroups(pagenr)
-├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs, ListOfGroups.cs (with pagination)
+│   └── GroupController.cs        ListOfGroups(pagenr), ViewGroup(id)
+├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs, ListOfGroups.cs (with pagination), ViewGroup.cs
 ├── SeidoHelpers/SeidoHelpers.cs  Extension methods for model validation and enum select lists
 ├── Views/
 │   ├── _ViewImports.cshtml       @using AppMvc / AppMvc.ViewModels + tag helpers
 │   ├── _ViewStart.cshtml         Sets _Layout
 │   ├── Home/                     Index.cshtml, DataSourceInfo.cshtml
-│   ├── Group/ListOfGroups.cshtml Paged list of music groups
+│   ├── Group/                    ListOfGroups.cshtml (paged list with links), ViewGroup.cshtml (details)
 │   ├── Seed/Seed.cshtml          Seed form
 │   └── Shared/                   _Layout.cshtml (+ .css), Error.cshtml, _ValidationScriptsPartial.cshtml
 └── wwwroot/                      index.html, css/ (incl. grid.css), js/seido/, favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
@@ -150,6 +129,9 @@ AppMvc/
 ### Layout and footer
 `_Layout.cshtml` is the common page frame: favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), three reusable Bootstrap modals, and a footer showing **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user) from `IOptions<EnvironmentOptions>`. No credentials are displayed.
 
+### Paged list
+`GroupController.ListOfGroups(int pagenr)` reads one page of 10 groups with one service call (`pageNumber = pagenr`, `pageSize = 10`; the database does `Skip/Take` and returns the total count too). `ViewModels/ListOfGroups.UpdatePagination(...)` computes the previous/next page numbers (clamped) and the number of numbered links (max 10); the view renders a Bootstrap pagination bar with `asp-route-pagenr` links. Page numbers are zero-based in the URL and 1-based on screen.
+
 ### Data overview and Seed pages
 - `HomeController.DataSourceInfo()` calls `IAdminService.GuestInfoAsync()` and shows six counters (seeded/unseeded music groups, albums, artists) from the database view `gstusr.vwInfoDb`.
 - `SeedController` + `Views/Seed/Seed.cshtml`: `GET /Seed/Seed` shows the current number of groups; the POST (protected by `[ValidateAntiForgeryToken]`) optionally removes all data, calls `SeedAsync(n)` (`SeedGenerator` + `app-seeds.json`: `n` groups with 2–4 albums and 2–4 artists each) and redirects to the data overview.
@@ -163,4 +145,4 @@ AppMvc/
 ## 3. Context and next steps
 
 - `AppMvc` and [AppRazor](apprazor-explanations.md) offer the same features on top of the same service layer; they differ in the page model (controllers/views here, Razor Pages there).
-- Next: searching in the list, viewing/editing/deleting a group (using the album and artist services already injected in `GroupController`), and authentication/authorization with the prepared pipeline.
+- Next: searching in the list, editing and deleting a group (the read-only fields of the detail view are a natural starting point), and authentication/authorization with the prepared pipeline.

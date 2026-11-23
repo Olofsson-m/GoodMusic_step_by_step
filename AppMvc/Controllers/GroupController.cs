@@ -47,6 +47,23 @@ public class GroupController : Controller
     }
     #endregion
 
+    #region ViewGroup handling
+    public async Task<IActionResult> ViewGroup(Guid id) 
+    {
+        Guid _groupId = id;
+        //Guid _groupId = Guid.Parse(Request.Query["id"]);   //an alternative
+
+        //use the Service
+        var mg = await _mg_service.ReadMusicGroupAsync(_groupId, false);
+
+        //Create the viewModel
+        var vm = new ViewGroup() { MusicGroup = mg.Item };
+
+        //Render the View
+        return View(vm);
+    }
+    #endregion
+
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
     public IActionResult Error()
     {

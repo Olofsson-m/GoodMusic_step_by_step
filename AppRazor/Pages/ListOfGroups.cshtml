@@ -22,7 +22,9 @@
                         @foreach (var item in Model.MusicGroups)
                         {
                             <div class="col-md-12 themed-grid-col">
-                                @item.Name
+                                <a asp-page="/ViewGroup" asp-route-id="@item.MusicGroupId">
+                                    @item.Name
+                                </a>
                             </div>
                         }
                         <nav aria-label="Standard pagination example">
