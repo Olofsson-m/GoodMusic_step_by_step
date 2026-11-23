@@ -71,6 +71,21 @@ namespace AppRazor.Pages
             return Page();
         }
 
+        public async Task<IActionResult> OnPostDeleteGroupAsync(Guid groupId, int pagenr)
+        {
+            await _service.DeleteMusicGroupAsync(groupId);
+
+            //Count what is left, so we never redirect to a page that no longer exists
+            //(e.g. after deleting the only item on the last page)
+            var resp = await _service.ReadMusicGroupsAsync(UseSeeds, false, SearchFilter, 0, 1);
+            int lastPageNr = Math.Max(0, (int)Math.Ceiling((double)resp.DbItemsCount / PageSize) - 1);
+            pagenr = Math.Clamp(pagenr, 0, lastPageNr);
+
+            //Post/Redirect/Get: a refresh of the browser will not post the delete again,
+            //and the user stays on the same page of the (filtered) list
+            return RedirectToPage("/ListOfGroups", new { pagenr, search = SearchFilter });
+        }
+
         //Inject services just like in WebApi
         public ListOfGroupsModel(IMusicGroupsService service, ILogger<ListOfGroupsModel> logger)
         {

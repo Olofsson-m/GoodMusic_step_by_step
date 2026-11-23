@@ -48,6 +48,24 @@ public class GroupController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)
+    {
+        //Use the Service
+        await _mg_service.DeleteMusicGroupAsync(groupId);
+
+        //Count what is left, so we never redirect to a page that no longer exists
+        //(e.g. after deleting the only item on the last page)
+        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, 0, 1);
+        int lastPageNr = Math.Max(0, (int)Math.Ceiling((double)_resp.DbItemsCount / vm.PageSize) - 1);
+        pagenr = Math.Clamp(pagenr, 0, lastPageNr);
+
+        //Post/Redirect/Get: a refresh of the browser will not post the delete again,
+        //and the user stays on the same page of the (filtered) list
+        return RedirectToAction(nameof(ListOfGroups), new { pagenr, search = vm.SearchFilter });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> SearchGroup(ListOfGroups vm)
     {
         //Use the Service

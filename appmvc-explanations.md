@@ -1,133 +1,121 @@
 # AppMvc explanations
 
 `AppMvc` is the ASP.NET Core **MVC** front-end of the GoodMusic solution (.NET 10). Pages are rendered on the server with Razor views; controllers handle requests and call the shared service layer (`Services` → `DbRepos` → `DbContext` → database).
-This document describes the code as it is in branch **`10-list-search`**, with the emphasis on what this branch adds compared with the previous branch, `9-view-list-item`.
+This document describes the code as it is in branch **`11-del-list-item`**, with the emphasis on what this branch adds compared with the previous branch, `10-list-search`.
 
 ---
 
-## 1. This branch: Searching the group list (compared with `9-view-list-item`)
+## 1. This branch: Deleting a group from the list with modal confirmation (compared with `10-list-search`)
 
 ### Purpose
-The paged list could only show the groups in database order. This branch adds a **search box** above the list: the user types a word, and only the groups that match are listed (still paged, 10 per page). The search is carried through the page links, so the filtered result can be paged through, bookmarked and shared. Two short URLs (`/rock`, `/queen`) are added as ready-made searches.
+The list could be searched and paged but was read-only. This branch adds a **Del** button on every row. Clicking it opens a **confirmation dialog** ("*&lt;name&gt; is about to be deleted.*" – *Cancel* / *Ok*); only after the user confirms with *Ok* is the group deleted in the database, and the list is shown again on the **same page** with the search filter kept. It is the first page that **changes** data from the list.
 
 ### Differences at a glance
 
 | File | Previous branch | This branch |
 |---|---|---|
-| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups(int pagenr)` – filter always `null` | `ListOfGroups(int pagenr, string search)` passes the filter on; + **`SearchGroup(ListOfGroups vm)`** (POST) |
-| [ViewModels/ListOfGroups.cs](AppMvc/ViewModels/ListOfGroups.cs) | paging state | + **`SearchFilter`** (the text typed by the user) |
-| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | list + pagination bar | + a **`<form method="post">`** with *Use seeded data* checkbox, search box and *Search* button; pagination links also carry `asp-route-search`; the count is shown |
-| [Program.cs](AppMvc/Program.cs) | aliases `/version`, `/static` | + aliases **`/rock`** and **`/queen`** |
+| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | name column `col-md-12` | name column `col-md-10` + a `col-md-2` column with a **Del button per row**; a **Bootstrap modal (`#delModal`)** placed inside the form; a hidden **`pagenr`** field with the current page |
+| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups`, `SearchGroup` | + **`DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)`** (POST, ends with a redirect back to the list) |
 
-The service and repository layers are unchanged: `ReadMusicGroupsAsync(seeded, flat, filter, pageNumber, pageSize)` already had a `filter` parameter, which the previous branches passed as `null`.
+No new JavaScript was needed: the two small helpers that already exist in `wwwroot/js/seido/` (`modals.js` and `select-list-items.js`, loaded by the layout) do the client-side work; this branch is the first to use them. The view model, service and repository code are unchanged – `IMusicGroupsService.DeleteMusicGroupAsync(Guid)` already existed.
 
-### Two ways to search – GET and POST
+### How it works – step by step
 
 ```
-(A) Search from the form (POST)
-Browser ──POST /Group/SearchGroup (SearchFilter, UseSeeds, antiforgery token)──► GroupController.SearchGroup(ListOfGroups vm)
-   │                                         │ ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr (=0), vm.PageSize)
-   │                                         │ vm.UpdatePagination(...)
-   ◄── HTML (View("ListOfGroups", vm)) ─────┘   first page of the result
-
-(B) Page links / bookmarks / aliases (GET)
-Browser ──GET /Group/ListOfGroups?pagenr=2&search=Rock──► GroupController.ListOfGroups(int pagenr, string search)
-   │                                         │ vm = new ListOfGroups { ThisPageNr = 2, SearchFilter = "Rock" }
-   │                                         │ ReadMusicGroupsAsync(true, false, "Rock", 2, 10) → UpdatePagination
-   ◄── HTML ───────────────────────────────┘
-
-/rock ─302─► /Group/ListOfGroups?search=Rock        /queen ─302─► /Group/ListOfGroups?search=Queen
+ 1. User clicks [Del] on a row                         (button type="button" – does NOT submit)
+      ├─ Bootstrap opens #delModal                     (data-bs-toggle="modal" data-bs-target="#delModal")
+      ├─ select-list-items.js  copies the row's id into the hidden input   <input type="hidden" name="groupId" data-seido-selected-item-id-target>
+      └─ modals.js (on "show.bs.modal") sets the modal text from the button's data-seido-modal-body
+ 2. Modal shows "<name> is about to be deleted."   [Cancel] [Ok]
+      ├─ Cancel / × / Esc  → modal closes, nothing is sent
+      └─ Ok  (button type="submit" formaction="/Group/DeleteGroup")  → the surrounding <form> is POSTed
+ 3. POST /Group/DeleteGroup   fields: groupId, pagenr, UseSeeds, SearchFilter, __RequestVerificationToken
+      ▼
+    GroupController.DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)   [HttpPost] [ValidateAntiForgeryToken]
+      │ await _mg_service.DeleteMusicGroupAsync(groupId)
+      │ count what is left → clamp pagenr to the last existing page
+      ▼
+    302 redirect → GET /Group/ListOfGroups?pagenr=<same page>&search=<same filter>   (Post/Redirect/Get)
+      ▼
+    ListOfGroups(pagenr, search)       the list, on the same page, without the deleted group
 ```
-The search *form* posts (A); everything else – paging, bookmarks and the aliases – uses GET (B) with the filter in the query string. Both end in the same view and use the same view model.
 
-### The form in the view
+### The row button
 ```cshtml
-<form method="post" class="needs-validation" novalidate>
-    <input asp-for="UseSeeds" class="form-check-input" type="checkbox" id="useSeeds"> Use seeded data
-    <input asp-for="SearchFilter" class="form-control" type="search" placeholder="Search" aria-label="Search">
-    <button asp-controller="Group" asp-action="SearchGroup" class="btn btn-outline-success" type="submit">Search</button>
-    <input type="hidden" name="groupId" data-seido-selected-item-id-target />
-    ...list and pagination bar...
-</form>
+<button type="button" class="btn btn-danger btn-sm m-1" data-bs-toggle="modal" data-bs-target="#delModal"
+        data-seido-modal-body="@item.Name is about to be deleted."
+        data-seido-selected-item-id="@item.MusicGroupId">
+    Del
+</button>
 ```
-- **`asp-for`** binds each input to a view-model property: it generates `name`/`id`/`value` (and for the bool, a hidden companion field so an *unchecked* box posts `false`). After a POST the text box shows the same text again, because the view model is rendered back.
-- **`asp-controller` / `asp-action` on the button** make the button submit this form to `/Group/SearchGroup` instead of the form's own URL (rendered as a `formaction` attribute). The form itself has no action. This pattern lets one form contain several buttons with different targets – used in later pages.
-- **Antiforgery:** the form tag helper automatically adds a hidden `__RequestVerificationToken` field, and the action has `[ValidateAntiForgeryToken]`; a POST without the token is answered with `400`.
-- The hidden `groupId` input with `data-seido-selected-item-id-target` is a placeholder that `wwwroot/js/seido/select-list-items.js` fills when an item is selected; it is not used by this branch's functionality.
-- A `<p>` above the form now shows `NrOfGroups`: *"The database contains N music groups the search criteria"* – the count of matching groups (the word *with* is missing in the text).
+- **`type="button"`** – the button never submits the form; its only job is to open the dialog. All rows share **one** modal (`#delModal`); what differs per row is carried in `data-*` attributes.
+- **`data-bs-toggle` / `data-bs-target`** – Bootstrap's declarative API: a click opens the element with id `delModal`.
+- **`data-seido-modal-body`** – the text to put in the dialog for *this* row. Razor HTML-encodes `@item.Name` inside the attribute, and `modals.js` writes it with `textContent` (not `innerHTML`), so a group name can not inject markup.
+- **`data-seido-selected-item-id`** – the id of the row's group (`MusicGroupId`), picked up by `select-list-items.js`.
 
-### The controller
+### The two JavaScript helpers (existing files, now in use)
+- **`select-list-items.js`** – at load it adds a `click` listener to every element that has `data-seido-selected-item-id`. When clicked, it copies that value into **every** `input[data-seido-selected-item-id-target]`, i.e. the hidden field `<input type="hidden" name="groupId" data-seido-selected-item-id-target />` that sits in the form. That is how the server later learns *which* group was chosen. (The Del buttons are rendered by the server, so they exist when the script runs.)
+- **`modals.js`** – at load it adds a `show.bs.modal` listener to every `.modal.fade`. When a modal is about to show, it reads `event.relatedTarget` (the button that triggered it) and sets the modal's title, body, *Cancel* text and *Ok* text from `data-seido-modal-title/-body/-cancel/-ok` – only those that are present are changed, the others keep the modal's own text. It finds the buttons by class: `.btn-secondary` = *Cancel*, `.btn-primary` = *Ok* (the Ok button has both `btn-primary` and `btn-danger`). It also supports an AJAX variant (`data-seido-modal-post-url`), which this page does not use.
+
+Because the order of the events is *click → select-list-items copies the id → Bootstrap shows the modal → modals.js sets the text*, the hidden field already holds the right id when the user presses *Ok*.
+
+### The modal markup – inside the form
+```cshtml
+<div class="modal fade" id="delModal" tabindex="-1" aria-labelledby="softModalLabel" aria-hidden="true">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title text-danger" id="softModalLabel">Confirm deletion</h5>
+         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">Hello from modal</div>        <!-- replaced by data-seido-modal-body -->
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" asp-controller="Group" asp-action="DeleteGroup" class="btn btn-primary btn-danger">Ok</button>
+    </div>
+  </div></div>
+</div>
+```
+- The comment in the view says it: *"Modal in the form tag"*. Since the modal is written **inside** the `<form>`, its *Ok* submit button submits that form. That is why `groupId`, `UseSeeds`, `SearchFilter` and the antiforgery token (all fields of the form) are posted without any extra code.
+- **`asp-controller` / `asp-action` on the Ok button** produce `formaction="/Group/DeleteGroup"`, so this button posts to the delete action while the *Search* button of the same form posts to `SearchGroup`. One form, several actions.
+- *Cancel*, the × button and the Esc key close the dialog (`data-bs-dismiss="modal"`); nothing is submitted.
+- The layout contains three more Bootstrap modals (`softModal`, `hardModal`, `dangerModal`). `modals.js` attaches to all `.modal.fade` elements, so it also handles them; `#delModal` is a page-specific copy in the form.
+
+### The controller action
 ```csharp
-public async Task<IActionResult> ListOfGroups(int pagenr, string search)
-{
-    var vm = new ListOfGroups() { ThisPageNr = pagenr, SearchFilter = search };
-    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
-    vm.MusicGroups = _resp.PageItems;  vm.NrOfGroups = _resp.DbItemsCount;
-    vm.UpdatePagination(_resp.DbItemsCount);
-    return View(vm);
-}
-
 [HttpPost]
 [ValidateAntiForgeryToken]
-public async Task<IActionResult> SearchGroup(ListOfGroups vm)
+public async Task<IActionResult> DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)
 {
-    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
-    vm.MusicGroups = _resp.PageItems;  vm.NrOfGroups = _resp.DbItemsCount;
-    vm.UpdatePagination(_resp.DbItemsCount);
-    return View("ListOfGroups", vm);
+    await _mg_service.DeleteMusicGroupAsync(groupId);
+
+    //Count what is left, so we never redirect to a page that no longer exists
+    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, 0, 1);
+    int lastPageNr = Math.Max(0, (int)Math.Ceiling((double)_resp.DbItemsCount / vm.PageSize) - 1);
+    pagenr = Math.Clamp(pagenr, 0, lastPageNr);
+
+    //Post/Redirect/Get
+    return RedirectToAction(nameof(ListOfGroups), new { pagenr, search = vm.SearchFilter });
 }
 ```
-- **Binding:** in the GET action, `pagenr` and `search` are bound from the query string; in the POST action, MVC binds the **whole view model** from the posted form fields (`SearchFilter`, `UseSeeds`; `ThisPageNr` is not in the form, so it stays 0 and a new search always starts at the first page). No `[BindProperty]` is needed on a model that is an action parameter.
-- **Returning another view:** `View("ListOfGroups", vm)` names the view explicitly; `View(vm)` would look for a view called `SearchGroup`.
-- Both actions repeat the same read-and-paginate steps – a candidate for a small private helper.
-- `SearchGroup` returns the page directly from the POST (no redirect). That is simple, but the browser shows `/Group/SearchGroup`, and *refreshing* asks the user to re-submit the form. The GET links (below) avoid this.
+- **Bound input:** `Guid groupId` comes from the hidden form field `groupId`; `int pagenr` from a second hidden field that holds **the page the user is on** (`<input type="hidden" name="pagenr" value="@Model.ThisPageNr" />`, added next to the `groupId` field); `ListOfGroups vm` is bound from the remaining form fields (`UseSeeds`, `SearchFilter`). The page number deliberately travels in a field named `pagenr` – the same name as in the list's query string – instead of binding `vm.ThisPageNr`, so that the search action, which binds the whole view model, is unaffected.
+- **`[HttpPost]`** – a delete must never be triggered by a GET (links, prefetching, crawlers). A GET to `/Group/DeleteGroup` is answered with `405 Method Not Allowed`.
+- **`[ValidateAntiForgeryToken]`** – the form tag helper adds the token field; a POST without a valid token is rejected with `400`, which blocks cross-site request forgery (another website making the user's browser post a delete).
+- **Post/Redirect/Get (PRG):** instead of rendering the list directly from the POST, the action answers with an **HTTP 302 redirect** to the ordinary GET list URL (`RedirectToAction` builds `/Group/ListOfGroups?pagenr=N&search=text`). The browser then does a normal GET, so the address bar shows the list URL, and **a refresh repeats only that harmless GET – the delete is not submitted again** (previously a refresh re-posted the delete of an already deleted id and ended in a `500`). The list is read by the existing `ListOfGroups` action, so the count, rows and page links come from the single code path used by every other visit to the list.
+- **Stays on the same page:** `pagenr` and the search filter are passed on in the redirect, so the user returns to the page they were on, with the filter still in the search box.
+- **Clamping to the last page:** if the deleted item was the only one on the last page, that page no longer exists. The action therefore counts the remaining groups (a one-row read of page 0 – the repo returns the total `DbItemsCount` with every read), computes `lastPageNr = ceil(count / PageSize) - 1` (at least 0) and uses `Math.Clamp(pagenr, 0, lastPageNr)`. Example: 101 groups, the user deletes the single group on page index 10 → the redirect goes to page index 9.
 
-### The view model
-```csharp
-public bool UseSeeds { get; set; } = true;
-public string SearchFilter { get; set; } = null;   // "ModelBinding for the form"
-```
-`SearchFilter` is the new property: it is posted from the text box, passed in from the query string by the GET action, handed to the service and rendered back into the text box and the page links.
+### What the repository does
+`MusicGroupsDbRepos.DeleteMusicGroupAsync(Guid id)`:
+1. Finds the group (`Where(MusicGroupId == id)` – a tracked entity).
+2. **Throws `ArgumentException("Item … is not existing")` if there is none.**
+3. `_dbContext.MusicGroups.Remove(item)` and `SaveChangesAsync()` – one SQL `DELETE` in a unit of work.
+4. Returns the removed item in a `ResponseItemDto`.
 
-### How the filter is applied (repository)
-```csharp
-filter ??= "";
-.Where(i => i.Seeded == seeded &&
-            (i.Name.ToLower().Contains(filter) ||
-             i.strGenre.ToLower().Contains(filter) ||
-             i.EstablishedYear.ToString().Contains(filter)))
-```
-- A group matches if the text occurs in its **name, genre or established year** (substring match). `null` is treated as `""`, which matches everything.
-- The same `Where` is used for both the `CountAsync()` (total hits, used for paging) and the page query (`Skip/Take`), so `NrOfGroups` and the page links always reflect the *filtered* result.
-- The filter is translated to SQL `LIKE '%…%'` and runs in the database; special characters are parameterised, so it is safe against SQL injection.
-- **Case:** the C# side lowercases the *column*, not the filter text; case-insensitive matching therefore relies on the database collation (SQL Server's default is case-insensitive: `Rock` and `rock` both give 30 hits). On a case-sensitive collation, uppercase search words would not match.
-
-Examples against the seeded sample data (100 groups): `Rock` → 30 groups (genre or name), `Jazz` → 22, `Floyd` → 17, `1986` → 1 (established year), `zzzz` → 0, empty → 100.
-
-### Pagination keeps the search
-Every page link now carries the filter:
-```cshtml
-<a class="page-link" asp-controller="Group" asp-action="ListOfGroups" asp-route-pagenr="@i" asp-route-search="@Model.SearchFilter">@(i + 1)</a>
-```
-`asp-route-search` is added to the query string (`?pagenr=1&search=Rock`); when `SearchFilter` is `null` the parameter is simply omitted. This is why the paged result is a GET link: it is bookmarkable and works with the browser's back button, which the POST result is not.
-
-### The aliases
-```csharp
-app.MapGet("/rock",  () => Results.Redirect("/Group/ListOfGroups?search=Rock"));
-app.MapGet("/queen", () => Results.Redirect("/Group/ListOfGroups?search=Queen"));
-```
-Minimal-API endpoints in `Program.cs` that answer with an HTTP 302 redirect to the search URL – handy short links (`/rock`) to a pre-filtered list, and a demonstration that the search can be driven entirely through the query string.
-
-### Behaviour and limitations to be aware of
-- **"Use seeded data" is not carried by the page links:** it is posted by the form, but the pagination links only carry `pagenr` and `search`. After unchecking the box, a search shows the unseeded rows (none in a freshly seeded database → 0 hits), but clicking a page number goes back to seeded data.
-- **No results:** with 0 hits `NrOfPages` is 0 and the « / » links point to `pagenr=-1`; following one gives HTTP 500, because a negative page number is not validated (see the pagination notes: clamp `pagenr` with `Math.Max(0, pagenr)`).
-- **No live feedback:** the search runs when the button is pressed (Enter inside the text box also submits, using the form's first submit button).
-- The *Use seeded data* label is empty and the text *"Use seeded data"* is written after the checkbox – cosmetic; the label `for` does not wrap the text.
+How the group's albums and artist links are treated is decided by the relationship rules of the database model (outside this branch). The database user in `DatabaseConnections:DefaultDataUser` must be allowed to delete: with the default `dbo` it is; the lower-privileged `gstusr` and `usr` roles have no `DELETE` right on the data schema.
 
 ### Trying it
-1. Open **Famous groups**, type `Rock` and press **Search**: the count line shows 30 and the first 10 matches are listed.
-2. Click page *2*: the URL is `/Group/ListOfGroups?pagenr=1&search=Rock` and the filter is preserved.
-3. Open `/queen` – you are redirected to the list filtered on `Queen`.
+1. Open **Famous groups**, optionally search for a group (e.g. `Floyd`).
+2. Click **Del** on a row: the dialog says "*&lt;name&gt; is about to be deleted.*". Press **Cancel** – nothing happens.
+3. Go to page *2* of the list, click **Del** again and press **Ok** – the row disappears, you are still on page *2* (the URL is the normal list URL, e.g. `/Group/ListOfGroups?pagenr=1`), the count drops by one and the search filter is still in the search box. Pressing F5 now just reloads the list.
+4. Check **Data overview**: the number of seeded music groups is one lower.
 
 ---
 
@@ -143,17 +131,17 @@ AppMvc/
 ├── Controllers/
 │   ├── HomeController.cs         Index, DataSourceInfo, Error
 │   ├── SeedController.cs         Seed (GET/POST)
-│   └── GroupController.cs        ListOfGroups(pagenr, search), SearchGroup (POST), ViewGroup(id)
+│   └── GroupController.cs        ListOfGroups(pagenr, search), DeleteGroup (POST), SearchGroup (POST), ViewGroup(id)
 ├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs, ListOfGroups.cs (paging + search), ViewGroup.cs
 ├── SeidoHelpers/SeidoHelpers.cs  Extension methods for model validation and enum select lists
 ├── Views/
 │   ├── _ViewImports.cshtml       @using AppMvc / AppMvc.ViewModels + tag helpers
 │   ├── _ViewStart.cshtml         Sets _Layout
 │   ├── Home/                     Index.cshtml, DataSourceInfo.cshtml
-│   ├── Group/                    ListOfGroups.cshtml (search form, paged list), ViewGroup.cshtml (details)
+│   ├── Group/                    ListOfGroups.cshtml (search form, list with Del buttons, delete modal), ViewGroup.cshtml (details)
 │   ├── Seed/Seed.cshtml          Seed form
 │   └── Shared/                   _Layout.cshtml (+ .css), Error.cshtml, _ValidationScriptsPartial.cshtml
-└── wwwroot/                      index.html, css/ (incl. grid.css), js/seido/, favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
+└── wwwroot/                      index.html, css/ (incl. grid.css), js/seido/ (modals.js, select-list-items.js), favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
 ```
 
 ### [Program.cs](AppMvc/Program.cs)
@@ -164,11 +152,12 @@ AppMvc/
 `ApplicationSecrets:SecretStorage`, `DatabaseConnections` (`DefaultDataUser`, `MigrationUser`, `UseDataSetWithTag`) and `DataService` (`DataSource`, `WebApiBaseUri`). Connection strings and credentials are kept in secrets.
 
 ### Layout and footer
-`_Layout.cshtml` is the common page frame: favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), three reusable Bootstrap modals, and a footer showing **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user) from `IOptions<EnvironmentOptions>`. No credentials are displayed.
+`_Layout.cshtml` is the common page frame: favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), three reusable Bootstrap modals, a footer showing **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user) from `IOptions<EnvironmentOptions>`, and the scripts (Bootstrap, jQuery, `modals.js`, `select-list-items.js`). No credentials are displayed.
 
-### Paged list and detail page
-- The list is read one page (10 groups) at a time: `pageNumber = pagenr`, `pageSize = 10`; the database applies `Skip/Take` and returns the total count too. `ViewModels/ListOfGroups.UpdatePagination(...)` computes previous/next page numbers (clamped) and the number of numbered links (max 10). Page numbers are zero-based in the URL and 1-based on screen.
-- Each group name links to `GroupController.ViewGroup(Guid id)` (`/Group/ViewGroup/<guid>`), which reads the group with its artists and albums and shows them in a read-only form-style view.
+### List, search and detail pages
+- The list is read one page (10 groups) at a time (`pageNumber = pagenr`, `pageSize = 10`; the database applies `Skip/Take` and returns the total count too); `ViewModels/ListOfGroups.UpdatePagination(...)` computes the page links. Page numbers are zero-based in the URL and 1-based on screen.
+- The search form posts `SearchFilter` and `UseSeeds` to `SearchGroup`; page links are GET links that carry `pagenr` and `search`. The filter matches name, genre or established year.
+- Each group name links to `ViewGroup(Guid id)` (`/Group/ViewGroup/<guid>`), which shows the group with its artists and albums read-only.
 
 ### Data overview and Seed pages
 - `HomeController.DataSourceInfo()` calls `IAdminService.GuestInfoAsync()` and shows six counters (seeded/unseeded music groups, albums, artists) from the database view `gstusr.vwInfoDb`.
@@ -176,11 +165,10 @@ AppMvc/
 
 ### Other
 - `SeidoHelpers.cs`: `ModelStateDictionary.IsValidPartially(...)` and `List<SelectListItem>.PopulateSelectList<TEnum>()`.
-- `wwwroot/js/seido/modals.js` and `select-list-items.js`: data-attribute driven helpers for the modals and for selecting list items.
 
 ---
 
 ## 3. Context and next steps
 
 - `AppMvc` and [AppRazor](apprazor-explanations.md) offer the same features on top of the same service layer; they differ in the page model (controllers/views here, Razor Pages there).
-- Next: deleting and editing groups from the list (the form around the list and the hidden `groupId` field are prepared for selecting an item), and authentication/authorization with the prepared pipeline.
+- Next: creating and editing groups (with their albums and artists), and authentication/authorization with the prepared pipeline – deletion in particular should later be restricted to authorised users.
