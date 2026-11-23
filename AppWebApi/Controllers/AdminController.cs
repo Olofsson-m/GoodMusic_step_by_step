@@ -6,6 +6,7 @@ using Services;
 using Configuration;
 using Configuration.Options;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Authorization;
 
 // For more information on enabling MVC for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -13,6 +14,12 @@ namespace AppWebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]/[action]")]
+
+#if !DEBUG    
+    [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+       Policy = null, Roles = "dbo")]
+#endif
+    
     public class AdminController : Controller
     {
         readonly DatabaseConnections _dbConnections;
@@ -42,6 +49,29 @@ namespace AppWebApi.Controllers
          }
 
         [HttpGet()]
+        [ActionName("SeedUsers")]
+        [ProducesResponseType(200, Type = typeof(UsrInfoDto))]
+        [ProducesResponseType(400, Type = typeof(string))]
+        public async Task<IActionResult> SeedUsers(string countUsr = "32", string countSupUsr = "2", string countDbOwners = "1")
+        {
+            try
+            {
+                int _countUsr = int.Parse(countUsr);
+                int _countSupUsr = int.Parse(countSupUsr);
+                int _countDbOwners = int.Parse(countDbOwners);
+
+                _logger.LogInformation($"{nameof(SeedUsers)}: {nameof(_countUsr)}: {_countUsr}, {nameof(_countSupUsr)}: {_countSupUsr}, {nameof(_countDbOwners)}: {_countDbOwners}");
+
+                var _info = await _service.SeedUsersAsync(_countUsr, _countSupUsr, _countDbOwners);
+                return Ok(_info);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpGet()]
         [ActionName("Log")]
         [ProducesResponseType(200, Type = typeof(IEnumerable<LogMessage>))]
         public async Task<IActionResult> Log([FromServices] ILoggerProvider _loggerProvider)
@@ -55,6 +85,8 @@ namespace AppWebApi.Controllers
         }
 #endif
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+          Policy = null, Roles = "dbo")]
         [HttpGet()]
         [ActionName("Seed")]
         [ProducesResponseType(200, Type = typeof(GstUsrInfoAllDto))]
@@ -76,6 +108,8 @@ namespace AppWebApi.Controllers
             }
         }
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+          Policy = null, Roles = "dbo")]
         [HttpGet()]
         [ActionName("RemoveSeed")]
         [ProducesResponseType(200, Type = typeof(GstUsrInfoAllDto))]
@@ -88,7 +122,7 @@ namespace AppWebApi.Controllers
 
                 _logger.LogInformation($"{nameof(RemoveSeed)}: {nameof(seededArg)}: {seededArg}");
                 var info = await _service.RemoveSeedAsync(seededArg);
-                return Ok(info);
+                return Ok(info);        
             }
             catch (Exception ex)
             {
@@ -113,7 +147,6 @@ namespace AppWebApi.Controllers
                 return BadRequest(ex.Message);
             }
         }
-
         public AdminController(IAdminService service, ILogger<AdminController> logger,
                 DatabaseConnections dbConnections, IOptions<VersionOptions> versionOptions, IOptions<EnvironmentOptions> environmentOptions)
         {

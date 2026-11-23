@@ -37,4 +37,9 @@ public interface IArtistsService
     public Task<ResponseItemDto<IArtist>> CreateArtistAsync(ArtistCUdto item);
 }
 
+public interface ILoginService
+{
+    public Task<ResponseItemDto<LoginUserSessionDto>> LoginUserAsync(LoginCredentialsDto usrCreds);
+}
+
 

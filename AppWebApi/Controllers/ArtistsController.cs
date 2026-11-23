@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Models.Interfaces;
 using Models.DTO;
 using Services;
+using Microsoft.AspNetCore.Authorization;
 
 // For more information on enabling MVC for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -11,6 +12,8 @@ namespace AppWebApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]/[action]")]
+    [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+        Policy = null, Roles = "usr, supusr, dbo")]
     public class ArtistsController : Controller
     {
         readonly IArtistsService _service = null;
@@ -76,6 +79,8 @@ namespace AppWebApi.Controllers
             }
         }
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+            Policy = null, Roles = "supusr, dbo")]
         [HttpDelete("{id}")]
         [ProducesResponseType(200, Type = typeof(ResponseItemDto<IArtist>))]
         [ProducesResponseType(400, Type = typeof(string))]
@@ -100,6 +105,8 @@ namespace AppWebApi.Controllers
             }
         }
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+            Policy = null, Roles = "supusr, dbo")]
         [HttpGet()]
         [ActionName("ReadItemDto")]
         [ProducesResponseType(200, Type = typeof(ArtistCUdto))]
@@ -131,6 +138,8 @@ namespace AppWebApi.Controllers
             }
         }
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+            Policy = null, Roles = "supusr, dbo")]
         [HttpPut("{id}")]
         [ActionName("UpdateItem")]
         [ProducesResponseType(200, Type = typeof(ResponseItemDto<IArtist>))]
@@ -157,6 +166,8 @@ namespace AppWebApi.Controllers
             }
         }
 
+        [Authorize(AuthenticationSchemes = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+            Policy = null, Roles = "supusr, dbo")]
         [HttpPost()]
         [ActionName("CreateItem")]
         [ProducesResponseType(200, Type = typeof(ResponseItemDto<IArtist>))]

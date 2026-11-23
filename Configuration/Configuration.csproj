@@ -14,7 +14,7 @@
     <Copyright>Copyright © Seido AB $([System.DateTime]::UtcNow.Year)</Copyright>
     <Description>This is an API used in Seido's various software developer training courses.</Description>
     <Company>Seido AB</Company>
-    <Product>Seido Music WebApi public</Product>
+    <Product>Seido Music WebApi secure</Product>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
 

@@ -1,4 +1,6 @@
-﻿using Configuration.Extensions;
+﻿using Microsoft.OpenApi;
+
+using Configuration.Extensions;
 using Configuration.Options;
 using DbContext.Extensions;
 using DbRepos;
@@ -62,6 +64,24 @@ builder.Services.AddSwaggerGen(c =>
         + $"<br>AppEnvironment: {versionOptions.AppEnvironment}",
 #endif
     });
+
+    // Add JWT Authentication to Swagger
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme"
+    });
+    c.AddSecurityRequirement(doc => new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecuritySchemeReference("Bearer", doc, null),
+            new List<string>()
+        }
+    });
 });
 
 
@@ -79,6 +99,9 @@ builder.Services.AddScoped<IAdminService, AdminServiceDb>();
 builder.Services.AddScoped<IMusicGroupsService, MusicGroupsServiceDb>();
 builder.Services.AddScoped<IAlbumsService, AlbumsServiceDb>();
 builder.Services.AddScoped<IArtistsService, ArtistsServiceDb>();
+
+builder.Services.AddScoped<LoginDbRepos>();
+builder.Services.AddScoped<ILoginService, LoginServiceDb>();
 
 var app = builder.Build();
 
