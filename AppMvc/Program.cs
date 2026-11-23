@@ -3,6 +3,7 @@ using Configuration.Extensions;
 using DbContext.Extensions;
 using DbRepos;
 using Models.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Encryption.Extensions;
 using Microsoft.Extensions.Options;
 using Configuration.Options;
@@ -53,6 +54,9 @@ builder.Services.AddHttpClient(name: "MusicWebApi", configureClient: options =>
             mediaType: "application/json",
             quality: 1.0));
 });
+
+//Model Authorization
+builder.Services.AddSingleton<IAuthorizationHandler, MusicGroupAuthorizationHandler>();
 
 //Used for Identity email verification
 builder.Services.AddTransient<Microsoft.AspNetCore.Identity.UI.Services.IEmailSender, EmailService>();

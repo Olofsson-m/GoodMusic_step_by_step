@@ -1,6 +1,8 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
+using Models.Authorization;
 using Models.Interfaces;
 using Services;
 
@@ -10,6 +12,7 @@ namespace AppRazor.Pages
     {
         readonly IMusicGroupsService _service = null;
         readonly ILogger<ListOfGroupsModel> _logger = null;
+        readonly IAuthorizationService _autService = null;
 
         [BindProperty]
         public bool UseSeeds { get; set; } = true;
@@ -73,6 +76,14 @@ namespace AppRazor.Pages
 
         public async Task<IActionResult> OnPostDeleteGroupAsync(Guid groupId, int pagenr)
         {
+            //Model level CRUD authorization
+            var mg = (await _service.ReadMusicGroupAsync(groupId, true)).Item;
+            var result = await _autService.AuthorizeAsync(User, mg, CrudOperations.Delete);
+            if (!result.Succeeded)
+            {
+                return Forbid();
+            }
+
             await _service.DeleteMusicGroupAsync(groupId);
 
             //Count what is left, so we never redirect to a page that no longer exists
@@ -87,10 +98,11 @@ namespace AppRazor.Pages
         }
 
         //Inject services just like in WebApi
-        public ListOfGroupsModel(IMusicGroupsService service, ILogger<ListOfGroupsModel> logger)
+        public ListOfGroupsModel(IMusicGroupsService service, ILogger<ListOfGroupsModel> logger, IAuthorizationService autService)
         {
             _service = service;
             _logger = logger;
+            _autService = autService;
         }
     }
 }

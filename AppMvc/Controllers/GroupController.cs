@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Models.DTO;
 using Models.Interfaces;
 using Services;
+using Models.Authorization;
 
 // For more information on enabling MVC for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -20,14 +21,17 @@ public class GroupController : Controller
     readonly IAlbumsService _alb_service = null;
     readonly IArtistsService _art_service = null;
     readonly ILogger<GroupController> _logger = null;
+    readonly IAuthorizationService _autService = null;
 
     //Inject services just like in WebApi
-    public GroupController(IMusicGroupsService mg_service, IAlbumsService alb_service, IArtistsService art_service, ILogger<GroupController> logger)
+    public GroupController(IMusicGroupsService mg_service, IAlbumsService alb_service, IArtistsService art_service, 
+    ILogger<GroupController> logger, IAuthorizationService autService)
     {
         _mg_service = mg_service;
         _alb_service = alb_service;
         _art_service = art_service;
         _logger = logger;
+        _autService = autService;
     }
 
     #region ListOfGroups handling
@@ -54,6 +58,13 @@ public class GroupController : Controller
     public async Task<IActionResult> DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)
     {
         //Use the Service
+        var mg = (await _mg_service.ReadMusicGroupAsync(groupId, true)).Item;
+        var result = await _autService.AuthorizeAsync(User, mg, CrudOperations.Delete);
+        if (!result.Succeeded)
+        {
+            return Forbid();
+        }
+
         await _mg_service.DeleteMusicGroupAsync(groupId);
 
         //Count what is left, so we never redirect to a page that no longer exists

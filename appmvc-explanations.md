@@ -1,8 +1,8 @@
-# AppMvc – Branch `17-sec-authorization`
+# AppMvc – Branch `18-sec-resource-authorization`
 
-This branch adds **authorization at controller and action level**. Until now the app knew who the user was (login), but any visitor could open every page and run every action. Now `GroupController` and `SeedController` require a logged-in user, with three public actions in `GroupController` as exceptions.
+This branch adds **resource-level authorization** for deleting a music group. Beyond "is the user logged in?", the controller now asks an authorization service "may this user perform *Delete* on *this music group*?", and the answer comes from a dedicated handler. Today the handler's rule is simple (logged-in users may do everything), but the structure allows rules based on roles, claims or the group's own properties.
 
-Everything below is compared with the previous branch (`16-sec-authentication`).
+Everything below is compared with the previous branch (`17-sec-authorization`).
 
 ---
 
@@ -10,106 +10,114 @@ Everything below is compared with the previous branch (`16-sec-authentication`).
 
 | Area | Previous branch | This branch |
 |---|---|---|
-| `GroupController` | Every action open to anyone | `[Authorize]` on the class, `[AllowAnonymous]` on `ListOfGroups`, `SearchGroup` and `ViewGroup` |
-| `SeedController` | Open to anyone | `[Authorize]` on the class |
-| `AccountController`, `HomeController` | Open | Unchanged, still open |
-| Views, layout, `Program.cs` | – | Unchanged |
+| Shared `Models/Authorization` | `User` only | New `CrudOperations` and `MusicGroupAuthorizationHandler` (`MusicGroupAuth.cs`) |
+| `Program.cs` | – | `AddSingleton<IAuthorizationHandler, MusicGroupAuthorizationHandler>()` |
+| `GroupController` constructor | 4 services | Also receives `IAuthorizationService` |
+| `DeleteGroup` | Class-level `[Authorize]`, then delete | Also loads the group and asks `AuthorizeAsync(User, group, CrudOperations.Delete)`. `Forbid()` if refused |
 
-The change is four attributes and two `using` lines. The mechanism that makes them work was already configured in the previous branch (the cookie's `LoginPath`).
-
----
-
-## 2. How `[Authorize]` works here
-
-The authorization middleware runs after authentication and before the action:
-
-```
-request → UseAuthentication (reads cookie GoodMusicAuth → HttpContext.User)
-        → UseAuthorization  (reads [Authorize] / [AllowAnonymous] on the endpoint)
-        → action
-```
-
-- No attribute: the action is open.
-- `[Authorize]` on a class: **every action in the class** requires an authenticated user.
-- `[AllowAnonymous]` on an action: overrides the class-level `[Authorize]` for that action.
-
-If an anonymous user reaches a protected endpoint, the cookie handler **challenges**: it answers with a 302 to the `LoginPath` from the previous branch, with the original address in `ReturnUrl`:
-
-```
-GET /Group/EditGroup  →  302  /Account/Login?ReturnUrl=%2FGroup%2FEditGroup
-```
-
-A logged-in user passes straight through. Because `AccessDeniedPath` also points to the login page, a user who is logged in but lacks a required role would be sent there too (roles are not used yet).
+The handler and the operations live in the shared `Models` project, so AppRazor uses the same code.
 
 ---
 
-## 3. Which action is protected
+## 2. The building blocks
 
-`GroupController` is `[Authorize]` as a whole. These actions opt out:
+### 2.1 Operations
+```csharp
+public static class CrudOperations
+{
+    public static OperationAuthorizationRequirement Create = new() { Name = nameof(Create) };
+    public static OperationAuthorizationRequirement Read   = new() { Name = nameof(Read) };
+    public static OperationAuthorizationRequirement Edit   = new() { Name = nameof(Edit) };
+    public static OperationAuthorizationRequirement Delete = new() { Name = nameof(Delete) };
+}
+```
+An `OperationAuthorizationRequirement` is just a named operation. It is the "what" of the question.
 
-| Action | Verb | Access | Why |
-|---|---|---|---|
-| `ListOfGroups` | GET | **Public** | Browsing the list |
-| `SearchGroup` | POST | **Public** | Searching the list |
-| `ViewGroup` | GET | **Public** | Reading one group |
-| `DeleteGroup` | POST | Login required | Changes data |
-| `EditGroup` | GET | Login required | Edit form |
-| `DeleteArtist`, `DeleteAlbum`, `AddArtist`, `AddAlbum`, `EditArtist`, `EditAlbum`, `Undo`, `Save` | POST | Login required | Edit form operations |
-| `Error` | GET | Login required (inherited) | See limitation 5 |
+### 2.2 The handler
+```csharp
+public class MusicGroupAuthorizationHandler
+    : AuthorizationHandler<OperationAuthorizationRequirement, IMusicGroup>
+{
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context,
+        OperationAuthorizationRequirement requirement, IMusicGroup resource) { … }
+}
+```
+The generic arguments say what it handles: an operation requirement on an `IMusicGroup` resource. It is only run when the resource passed to `AuthorizeAsync` is an `IMusicGroup`. The rules coded in it:
 
-`SeedController` is `[Authorize]` as a whole: all its actions need a login.
+| User | Create | Read | Edit | Delete |
+|---|---|---|---|---|
+| Anonymous | no | **yes** | no | no |
+| Logged in | yes | yes | yes | yes |
 
-Putting `[Authorize]` on the class and opening the exceptions is the **safe default**: a new action added to `GroupController` later is protected unless someone deliberately marks it `[AllowAnonymous]`.
+`context.Succeed(requirement)` grants. Doing nothing means "not granted". A handler never denies on its own, so with no `Succeed` the check fails.
 
-`AccountController` is deliberately **not** `[Authorize]`. It contains `Login`, `Register` and `ConfirmEmail`, which anonymous users must reach. Putting `[Authorize]` on it would make the login page itself redirect to the login page.
+### 2.3 Registration
+```csharp
+builder.Services.AddSingleton<IAuthorizationHandler, MusicGroupAuthorizationHandler>();
+```
+`IAuthorizationService` collects all registered `IAuthorizationHandler`s and runs those that match the resource type. A singleton is right here, because the handler has no state or dependencies.
+
+---
+
+## 3. The delete flow
+
+```
+POST /Group/DeleteGroup   (class-level [Authorize] runs first)
+  1. var mg = (await _mg_service.ReadMusicGroupAsync(groupId, true)).Item;
+  2. var result = await _autService.AuthorizeAsync(User, mg, CrudOperations.Delete);
+  3. if (!result.Succeeded) return Forbid();
+  4. await _mg_service.DeleteMusicGroupAsync(groupId);
+  5. clamp page number, RedirectToAction(ListOfGroups, { pagenr, search })
+```
+
+Why load the group first? A resource-based check needs the resource itself, so rules can depend on its data (for example "only the creator may delete"). The handler here does not use the group's data yet, but the call shape is ready for it.
+
+`Forbid()` makes the cookie handler answer with a redirect to `AccessDeniedPath`, which is `/Account/Login`.
+
+### Two layers
+1. `[Authorize]` on `GroupController` is the **coarse gate**: no login, no action.
+2. `AuthorizeAsync` is the **fine gate**: login is not enough, the handler must also allow *this operation on this resource*.
+
+Today layer 2 never says no to a logged-in user, so the visible behaviour is identical to the previous branch. The difference is where the rule lives.
+
+**Fix applied while analysing this branch:** the commit replaced the line `await _mg_service.DeleteMusicGroupAsync(groupId);` with the authorization check but did not put the delete call back, so *Delete* redirected to the list and deleted nothing (verified: a created test group was still there after 5 delete requests). The call was restored after the `Forbid()` check. Also, `Program.cs` was missing `using Microsoft.AspNetCore.Authorization;` (the project did not compile), which was added.
 
 ---
 
 ## 4. Verified behaviour
 
-The solution builds with 0 errors (after adding the missing `using`, see below). The app was run and tested over HTTP:
+The solution builds with 0 errors (after the `using` fix). Test groups ("ZZ Auth Test") were created through the Edit form, then deleted. The app was run against the SQL Server container:
 
-| Request | Anonymous | Logged in |
-|---|---|---|
-| `GET /Group/ListOfGroups` | 200 | 200 |
-| `GET /Group/EditGroup` | **302 → `/Account/Login?ReturnUrl=%2FGroup%2FEditGroup`** | 200 |
-| `GET /Seed/Seed` | **302 → `/Account/Login?ReturnUrl=%2FSeed%2FSeed`** | 200 |
-| `POST /Group/DeleteGroup` (valid antiforgery token) | **302 → `/Account/Login?ReturnUrl=%2FGroup%2FDeleteGroup`**. The delete is not executed | – |
-| `POST /Seed/Seed` | **302 → login** | – |
-| `GET /Home/DataSourceInfo`, `/Account/Login`, `/Account/Register` | 200 | 200 |
+| Request | Result |
+|---|---|
+| Anonymous `POST /Group/DeleteGroup` (valid token, real id) | 302 → `/Account/Login?ReturnUrl=…`. The group still exists |
+| Logged-in `POST /Group/DeleteGroup`, real id | 302 → `/Group/ListOfGroups?pagenr=0`. The group is gone (5 of 5 test groups deleted, 0 left) |
+| Logged-in `POST /Group/DeleteGroup`, unknown id | **500** (`ReadMusicGroupAsync` throws for an id that does not exist) |
 
-`GET /Group/ViewGroup?id=<unknown id>` returns 500 in both states. That is the existing behaviour for an id that does not exist, and is not related to authorization.
-
-**Build fix applied while analysing this branch:** `GroupController` and `SeedController` use `[Authorize]` and `[AllowAnonymous]` but did not import their namespace, so the project did not compile. `using Microsoft.AspNetCore.Authorization;` was added to both [GroupController.cs](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppMvc/Controllers/GroupController.cs) and [SeedController.cs](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppMvc/Controllers/SeedController.cs).
+Anonymous requests are stopped by the class-level `[Authorize]` before `AuthorizeAsync` is reached, so the handler's anonymous branch was not exercised here. The `Forbid()` branch is not reachable today: a logged-in user always succeeds.
 
 ---
 
-## 5. Why MVC gets "Delete group" right
+## 5. Limitations to be aware of
 
-Delete is a separate action (`DeleteGroup`) on `GroupController`. `[Authorize]` is applied per action, so it is protected, while the list that contains the delete button (`ListOfGroups`) stays public. The protection follows the operation, not the page that shows its button.
-
----
-
-## 6. Limitations to be aware of
-
-1. **The buttons are still shown to anonymous visitors.** The list page renders **New**, **Edit** and the **Delete** confirmation dialog for everyone. Clicking one sends the visitor to the login page (or the POST is refused), so nothing is exposed, but the UI promises something that is not available. Hiding them depends on the login state, which is a later step.
-2. **Anyone who logs in may edit and delete.** `[Authorize]` only checks "is logged in". There are no roles or ownership rules, so every registered user can change all groups.
-3. **After login the user lands on `/`.** The `ReturnUrl` is in the address, but `LoginOk` ignores it, so the user must navigate back to the page they wanted.
-4. **The pages ask the user to log in after the form was filled in.** A POST that is challenged is not replayed after login, so any typed-in data is lost.
-5. **`Error()` in `GroupController` is behind the class-level `[Authorize]`.** An anonymous visitor who is sent to it would be redirected to the login page instead of seeing an error page.
-6. **Authorization is attribute-only.** The services below the controller (`IMusicGroupsService` etc.) do not check who calls them. Anything that calls them from a non-protected entry point (for example a new controller action without an attribute) is unprotected.
+1. **Only `DeleteGroup` uses the handler.** `EditGroup`, `Save`, `AddArtist`, `AddAlbum` and the other edit actions rely on `[Authorize]` alone. `Create`, `Read` and `Edit` exist in `CrudOperations` and in the handler but are not called.
+2. **The rule is "logged in = allowed".** There are no roles, claims or ownership checks, so every registered user can delete every group.
+3. **Unknown id gives a 500**, not a 404. The service throws, and the controller does not catch it.
+4. **The group is read before it is deleted**, which is one extra database call per delete. It is the price of resource-based authorization.
+5. **The handler is only registered in `Program.cs`.** If it is removed, `AuthorizeAsync` fails for every user, and delete is refused for everyone (safe by default).
+6. **UI still shows buttons to everyone.** The list page shows *New*, *Edit* and the delete dialog to anonymous visitors. The server refuses the action, but the buttons are not hidden.
+7. **`Forbid()` redirects to the login page**, even for a logged-in user. The user sees the login form, with no "not allowed" message.
 
 ---
 
-## 7. Trying it
+## 6. Trying it
 
-1. `dotnet run` in `AppMvc`. Log out.
-2. Open *Famous groups*: the list, search and *View* work.
-3. Click **Edit**, **New**, or open `/Seed/Seed` directly: you land on `/Account/Login?ReturnUrl=…`.
-4. Log in, then repeat. The pages now open.
+1. `dotnet run` in `AppMvc`, log in, and delete a group on the list page: it disappears.
+2. Log out and try the same: the page asks for a login (the delete dialog is shown, but the request is refused).
+3. To see the fine gate say no, change the handler so that `Delete` is only allowed for a specific user or role, then delete as another user: `Forbid()` is returned.
 
 ---
 
-## 8. Next steps
+## 7. Next steps
 
-Control access per user or per item (model-level authorization), and show or hide the buttons by login state.
+Show or hide buttons by what the user may do (the same `AuthorizeAsync` can be called from the views), and move to roles or ownership in the handler.
