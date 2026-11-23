@@ -1,20 +1,21 @@
-To create the AppWebApi
+To create the AppMvc and AppRazor
+All applications are using the same software stack
 
 1. Create the database. With Terminal in folder _scripts 
-   E.g. database name: sql-music, database type: sqlserver, server: docker, default user: dbo, application: ../AppWebApi
-
+   E.g. database name: sql-music, database type: sqlserver, server: docker, default user: dbo, application: ../AppRazor
+   use application as ../AppRazor or ../AppMvc depending on application you want to build database for.
+   
    macOs
-   ./database-rebuild-all.sh sql-music sqlserver docker dbo ../AppWebApi
-   ./database-rebuild-all.sh sql-music mysql docker dbo ../AppWebApi
-   ./database-rebuild-all.sh sql-music postgresql docker dbo ../AppWebApi
+   ./database-rebuild-all.sh sql-music sqlserver docker dbo ../AppRazor
+   ./database-rebuild-all.sh sql-music mysql docker dbo ../AppRazor
+   ./database-rebuild-all.sh sql-music postgresql docker dbo ../AppRazor
    
    Windows
-   ./database-rebuild-all.ps1 sql-music sqlserver docker dbo ../AppWebApi
-   ./database-rebuild-all.ps1 sql-music mysql docker dbo ../AppWebApi
-   ./database-rebuild-all.ps1 sql-music postgresql docker dbo ../AppWebApi
+   ./database-rebuild-all.ps1 sql-music sqlserver docker dbo ../AppRazor
+   ./database-rebuild-all.ps1 sql-music mysql docker dbo ../AppRazor
+   ./database-rebuild-all.ps1 sql-music postgresql docker dbo ../AppRazor
 
    Ensure no errors from build, migration or database update
-
 
 2. From Azure Data Studio you can now connect to the database
    Use connection string from user secrets:
@@ -23,27 +24,14 @@ To create the AppWebApi
 
 3. Use Azure Data Studio to execute SQL script DbContext/SqlScripts/<db_type>/azure/initDatabase.sql
 
-4. Run AppWebApi with or without debugger
 
-   Without debugger:   
-   Open a Terminal in folder AppWebApi run: 
-   dotnet run -lp https 
-   open url: https://localhost:7066/swagger
 
-   Verify your can execute endpoint Admin/Environment and Guest/Info
+Running AppRazor using WebApi or Database as source:
+----------------------------------------------------
 
-5. Use endpoint Admin/SeedUsers to seed users into the the database. 
-   Use Azure Data Studio to verify content in Users Table
+4. We are not using security in this verions, so ensure that in appsettings.json 
+   "DefaultDataUser": "dbo"
 
-6. Use endpoint Admin/Seed to seed the database, Admin/RemoveSeed to remove the seed
-   Verify database seed with endpoint Guest/Info
+5. Run AppRazor or AppMvc with debugger
 
-7. As dbo you can now use and play with all endpoints
-
-8. In folder AppWebApi modify appsettings.json tag 
-   "DefaultDataUser": "dbo"  to "gstusr" 
-   Restart the application. You will see that the database rejects all endpoints except Admin/Environment, Admin/Log, Guest/Info and Guest/LoginUser
-
-   Change "DefaultDataUser": to "usr" or "supusr"
-   Restart the application. You will see that the database rejects all endpoints except those database calls privileged by the role
-
+   Use menu alternative to seed and play around with data from the database
