@@ -1,10 +1,12 @@
 ﻿using System.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using AppMvc.ViewModels;
 using Services;
 
 namespace AppMvc.Controllers;
 
+[Authorize]
 public class SeedController : Controller
 {
     readonly ILogger<SeedController> _logger;

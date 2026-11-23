@@ -1,8 +1,8 @@
-# AppMvc – Branch `16-sec-authentication`
+# AppMvc – Branch `17-sec-authorization`
 
-This branch lets a registered user **log in and log out** with ASP.NET Core Identity. After a successful login the browser holds an authentication cookie, and the menu changes to show who is logged in. Nothing is protected by it yet: it identifies the user, but no page requires a login.
+This branch adds **authorization at controller and action level**. Until now the app knew who the user was (login), but any visitor could open every page and run every action. Now `GroupController` and `SeedController` require a logged-in user, with three public actions in `GroupController` as exceptions.
 
-Everything below is compared with the previous branch (`15-sec-registration`), where a user could register but there was no login or logout.
+Everything below is compared with the previous branch (`16-sec-authentication`).
 
 ---
 
@@ -10,170 +10,106 @@ Everything below is compared with the previous branch (`15-sec-registration`), w
 
 | Area | Previous branch | This branch |
 |---|---|---|
-| Login | None (a new user was signed in only by registering) | `AccountController.Login` (GET) and `LoginOk` (POST) |
-| Logout | None | `AccountController.Logout` (POST with antiforgery token; a GET just redirects) |
-| View model | `Register`, `ConfirmEmail` | New `ViewModels/Login.cs` with the InputModel `LoginIM` |
-| Views | `Register`, `RegisterConfirmation`, `ConfirmEmail` | New `Views/Account/Login.cshtml` |
-| `Program.cs` | Identity only | `ConfigureApplicationCookie(...)` sets login/logout paths, lifetime and cookie flags |
-| Layout | Static *Seed* and *Register* links | Menu depends on `User.Identity.IsAuthenticated`, shows the user's first name |
+| `GroupController` | Every action open to anyone | `[Authorize]` on the class, `[AllowAnonymous]` on `ListOfGroups`, `SearchGroup` and `ViewGroup` |
+| `SeedController` | Open to anyone | `[Authorize]` on the class |
+| `AccountController`, `HomeController` | Open | Unchanged, still open |
+| Views, layout, `Program.cs` | – | Unchanged |
+
+The change is four attributes and two `using` lines. The mechanism that makes them work was already configured in the previous branch (the cookie's `LoginPath`).
 
 ---
 
-## 2. The authentication cookie
+## 2. How `[Authorize]` works here
 
-`AddDefaultIdentity<User>(...)` (unchanged) already registers cookie authentication. This branch tunes the cookie in `Program.cs`:
-
-```csharp
-builder.Services.ConfigureApplicationCookie(options =>
-{
-    options.LoginPath = "/Account/Login";          // where an [Authorize] redirect would go
-    options.AccessDeniedPath = "/Account/Login";
-    options.LogoutPath = "/Account/Logout";
-    options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
-    options.SlidingExpiration = true;              // the 60 minutes restart while the user is active
-    options.Cookie.HttpOnly = true;                // not readable from JavaScript
-    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;  // works on http in development
-    options.Cookie.SameSite = SameSiteMode.Lax;
-    options.Cookie.Name = "GoodMusicAuth";
-});
-```
-
-Without this, Identity would redirect to its default `/Identity/Account/Login`, which does not exist in AppMvc (404). The paths point at the new `AccountController` actions instead. They only matter once something uses `[Authorize]`, which comes in a later branch.
-
----
-
-## 3. The login flow
+The authorization middleware runs after authentication and before the action:
 
 ```
-GET  /Account/Login   → Login.cshtml with an empty LoginIM
-POST /Account/LoginOk → validate → PasswordSignInAsync → redirect "/" or re-render with an error
-POST /Account/Logout  → SignOutAsync → redirect "/"   (GET /Account/Logout only redirects to "/")
+request → UseAuthentication (reads cookie GoodMusicAuth → HttpContext.User)
+        → UseAuthorization  (reads [Authorize] / [AllowAnonymous] on the endpoint)
+        → action
 ```
 
-### 3.1 `Login` view model (InputModel pattern)
+- No attribute: the action is open.
+- `[Authorize]` on a class: **every action in the class** requires an authenticated user.
+- `[AllowAnonymous]` on an action: overrides the class-level `[Authorize]` for that action.
 
-```csharp
-public class Login
-{
-    [BindProperty] public LoginIM LoginCreds { get; set; }
-    public ModelValidationResult ValidationResult { get; set; }
-
-    public class LoginIM
-    {
-        [Required, EmailAddress]           public string Email { get; set; }
-        [Required, DataType(Password)]     public string Password { get; set; }
-        public bool RememberMe { get; set; }
-    }
-}
-```
-
-`LoginIM` holds exactly what the form posts. The `ValidationResult` carries both data-annotation errors and the login error to the view.
-
-### 3.2 `LoginOk` (POST)
-
-1. `ModelState.IsValidPartially(...)` checks `LoginIM`. On errors, `Login.cshtml` is shown again with the messages.
-2. `SignInManager.PasswordSignInAsync(email, password, RememberMe, lockoutOnFailure: false)` looks the user up (the user name is the e-mail, set at registration), verifies the password hash and, if it matches, issues the cookie.
-3. The result is handled in this order:
-   - `Succeeded` → `LocalRedirect("/")`.
-   - `RequiresTwoFactor` → redirect to a `LoginWith2fa` page (does not exist; 2FA is not enabled).
-   - `IsLockedOut` → redirect to a `Lockout` page (does not exist; `lockoutOnFailure` is `false`, so lockout never happens).
-   - otherwise → the view is shown again with the single message **"Invalid login attempt."**
-
-An unknown e-mail and a wrong password give the same message, so the page does not reveal which e-mails are registered.
-
-`RememberMe` makes the cookie persistent, so it survives closing the browser. Without it, it is a session cookie.
-
-### 3.3 `Logout` (POST)
-
-`[HttpPost] [ValidateAntiForgeryToken]`. `SignInManager.SignOutAsync()` removes the cookie, then the user is redirected to `/`. A GET to `/Account/Logout` (a typed URL, a link, an image) does **not** sign out. It only redirects to `/`. This is a second action method `LogoutGet` with `[ActionName("Logout")]`.
-
----
-
-## 4. The layout
-
-`_Layout.cshtml` injects `UserManager<User>` and builds the menu from the login state:
-
-| State | Menu |
-|---|---|
-| Anonymous | *Login*, *Register* |
-| Logged in | *Seed*, and a *"<FirstName> Logout"* button |
-
-```csharp
-@if (User.Identity.IsAuthenticated)  { /* Seed */ }
-@if (!User.Identity.IsAuthenticated) { /* Login, Register */ }
-else
-{
-    var usr = await userManager.GetUserAsync(User);
-    <form asp-controller="Account" asp-action="Logout" method="post" class="d-inline">
-        <button type="submit" class="nav-link">@usr.FirstName Logout</button>
-    </form>
-}
-```
-
-The logout is a small form with a button styled as `nav-link`, so it can send a POST. The form tag helper adds the antiforgery token.
-
-`GetUserAsync` reads the user from the database on every page view, to get `FirstName`. This is also why `FirstName` was added in the previous branch.
-
-**Build fix applied while analysing this branch:** the layout used `UserManager<User>` and `User` without importing their namespaces, so the project did not compile. `@using Microsoft.AspNetCore.Identity` and `@using Models.Authorization` were added to [_Layout.cshtml](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppMvc/Views/Shared/_Layout.cshtml).
-
----
-
-## 5. Files in AppMvc touched by this branch
+If an anonymous user reaches a protected endpoint, the cookie handler **challenges**: it answers with a 302 to the `LoginPath` from the previous branch, with the original address in `ReturnUrl`:
 
 ```
-AppMvc/
-├─ Controllers/AccountController.cs   + Login, LoginOk, Logout (POST) and LogoutGet
-├─ ViewModels/Login.cs                NEW  Login + LoginIM
-├─ Views/Account/Login.cshtml         NEW
-├─ Views/Shared/_Layout.cshtml        injects UserManager, state-dependent menu (+ using lines)
-└─ Program.cs                         ConfigureApplicationCookie(...)
+GET /Group/EditGroup  →  302  /Account/Login?ReturnUrl=%2FGroup%2FEditGroup
 ```
 
----
-
-## 6. Verified behaviour
-
-The solution builds with 0 errors (after the `using` fix). The app was run against the SQL Server container and tested over HTTP:
-
-| Test | Result |
-|---|---|
-| Register a new user | 302 to `/`, cookie `GoodMusicAuth` set, menu shows *Lena Logout* |
-| `GET /Account/Logout` | 302 to `/`, user **stays logged in** |
-| POST to `/Account/Logout` without a token | 400, user stays logged in |
-| POST to `/Account/Logout` with the token (menu button) | 302 to `/`, menu shows *Login* and *Register* again |
-| Login with empty fields | 200, "The Email field is required." and "The Password field is required." |
-| Login with a malformed e-mail | 200, "The Email field is not a valid e-mail address." |
-| Wrong password / unknown user | 200, "Invalid login attempt." |
-| Correct credentials | 302 to `/`, menu shows *Seed* and *Lena Logout* |
-| Cookie flags | `path=/; samesite=lax; httponly` |
-| `/Identity/Account/Login` | 404 (no default Identity UI in AppMvc) |
-| `/Seed/Seed` and `/Group/ListOfGroups` anonymously | **200**, same as when logged in |
-| POST to `LoginOk` **without** an antiforgery token | **400, no login** |
-| POST to `LoginOk` with the token | 302 to `/` |
-| `GET /Account/Login` | 200, one form, no "TEMPLATE" text |
+A logged-in user passes straight through. Because `AccessDeniedPath` also points to the login page, a user who is logged in but lacks a required role would be sent there too (roles are not used yet).
 
 ---
 
-## 7. Limitations to be aware of
+## 3. Which action is protected
 
-1. **Nothing is protected.** There is no `[Authorize]`. The *Seed* link is hidden from anonymous users, but `/Seed/Seed` still works for them when typed in.
-2. **`returnUrl` is ignored.** Both success paths redirect to `/`, so a user sent to the login page from a protected page is not returned to it.
-3. **Dead branches in `LoginOk`.** `RedirectToPage("./LoginWith2fa")` and `RedirectToPage("./Lockout")` are Razor Pages calls copied from the Identity template. They have no target in an MVC-only app, and the pages do not exist.
-4. **Lockout is off** (`lockoutOnFailure: false`), so passwords can be guessed without limit.
-5. **A stale cookie breaks the menu.** If the cookie is valid but the user no longer exists (for example after a database rebuild), `GetUserAsync` returns `null` and `usr.FirstName` throws. This follows from the code, and was not triggered in the test.
-6. The login page is still reachable when already logged in.
+`GroupController` is `[Authorize]` as a whole. These actions opt out:
+
+| Action | Verb | Access | Why |
+|---|---|---|---|
+| `ListOfGroups` | GET | **Public** | Browsing the list |
+| `SearchGroup` | POST | **Public** | Searching the list |
+| `ViewGroup` | GET | **Public** | Reading one group |
+| `DeleteGroup` | POST | Login required | Changes data |
+| `EditGroup` | GET | Login required | Edit form |
+| `DeleteArtist`, `DeleteAlbum`, `AddArtist`, `AddAlbum`, `EditArtist`, `EditAlbum`, `Undo`, `Save` | POST | Login required | Edit form operations |
+| `Error` | GET | Login required (inherited) | See limitation 5 |
+
+`SeedController` is `[Authorize]` as a whole: all its actions need a login.
+
+Putting `[Authorize]` on the class and opening the exceptions is the **safe default**: a new action added to `GroupController` later is protected unless someone deliberately marks it `[AllowAnonymous]`.
+
+`AccountController` is deliberately **not** `[Authorize]`. It contains `Login`, `Register` and `ConfirmEmail`, which anonymous users must reach. Putting `[Authorize]` on it would make the login page itself redirect to the login page.
 
 ---
 
-## 8. Trying it
+## 4. Verified behaviour
 
-1. `dotnet run` in `AppMvc` and open **Register**. Create a user (or use one from the previous branch).
-2. Click *Logout*, then *Login*, and sign in. The menu shows your first name and *Seed*.
-3. Open the browser developer tools: the cookie `GoodMusicAuth` is `HttpOnly` and `SameSite=Lax`.
-4. Try a wrong password and an unknown e-mail. Both show "Invalid login attempt."
+The solution builds with 0 errors (after adding the missing `using`, see below). The app was run and tested over HTTP:
+
+| Request | Anonymous | Logged in |
+|---|---|---|
+| `GET /Group/ListOfGroups` | 200 | 200 |
+| `GET /Group/EditGroup` | **302 → `/Account/Login?ReturnUrl=%2FGroup%2FEditGroup`** | 200 |
+| `GET /Seed/Seed` | **302 → `/Account/Login?ReturnUrl=%2FSeed%2FSeed`** | 200 |
+| `POST /Group/DeleteGroup` (valid antiforgery token) | **302 → `/Account/Login?ReturnUrl=%2FGroup%2FDeleteGroup`**. The delete is not executed | – |
+| `POST /Seed/Seed` | **302 → login** | – |
+| `GET /Home/DataSourceInfo`, `/Account/Login`, `/Account/Register` | 200 | 200 |
+
+`GET /Group/ViewGroup?id=<unknown id>` returns 500 in both states. That is the existing behaviour for an id that does not exist, and is not related to authorization.
+
+**Build fix applied while analysing this branch:** `GroupController` and `SeedController` use `[Authorize]` and `[AllowAnonymous]` but did not import their namespace, so the project did not compile. `using Microsoft.AspNetCore.Authorization;` was added to both [GroupController.cs](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppMvc/Controllers/GroupController.cs) and [SeedController.cs](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppMvc/Controllers/SeedController.cs).
 
 ---
 
-## 9. Next steps
+## 5. Why MVC gets "Delete group" right
 
-Protect pages and actions with `[Authorize]` (the login and access-denied paths above will then take effect), honour `returnUrl`, and add roles.
+Delete is a separate action (`DeleteGroup`) on `GroupController`. `[Authorize]` is applied per action, so it is protected, while the list that contains the delete button (`ListOfGroups`) stays public. The protection follows the operation, not the page that shows its button.
+
+---
+
+## 6. Limitations to be aware of
+
+1. **The buttons are still shown to anonymous visitors.** The list page renders **New**, **Edit** and the **Delete** confirmation dialog for everyone. Clicking one sends the visitor to the login page (or the POST is refused), so nothing is exposed, but the UI promises something that is not available. Hiding them depends on the login state, which is a later step.
+2. **Anyone who logs in may edit and delete.** `[Authorize]` only checks "is logged in". There are no roles or ownership rules, so every registered user can change all groups.
+3. **After login the user lands on `/`.** The `ReturnUrl` is in the address, but `LoginOk` ignores it, so the user must navigate back to the page they wanted.
+4. **The pages ask the user to log in after the form was filled in.** A POST that is challenged is not replayed after login, so any typed-in data is lost.
+5. **`Error()` in `GroupController` is behind the class-level `[Authorize]`.** An anonymous visitor who is sent to it would be redirected to the login page instead of seeing an error page.
+6. **Authorization is attribute-only.** The services below the controller (`IMusicGroupsService` etc.) do not check who calls them. Anything that calls them from a non-protected entry point (for example a new controller action without an attribute) is unprotected.
+
+---
+
+## 7. Trying it
+
+1. `dotnet run` in `AppMvc`. Log out.
+2. Open *Famous groups*: the list, search and *View* work.
+3. Click **Edit**, **New**, or open `/Seed/Seed` directly: you land on `/Account/Login?ReturnUrl=…`.
+4. Log in, then repeat. The pages now open.
+
+---
+
+## 8. Next steps
+
+Control access per user or per item (model-level authorization), and show or hide the buttons by login state.

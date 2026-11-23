@@ -9,7 +9,10 @@ using Configuration.Options;
 
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddRazorPages();
+builder.Services.AddRazorPages(option =>
+{
+    option.Conventions.AuthorizeFolder("/Members");
+});
 
 //adding support for several secret sources and database sources
 //to use either user secrets or azure key vault depending on UseAzureKeyVault tag in appsettings.json

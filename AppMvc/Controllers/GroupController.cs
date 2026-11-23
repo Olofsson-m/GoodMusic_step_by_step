@@ -2,6 +2,7 @@
 using AppMvc.ViewModels;
 using AppMvc.SeidoHelpers;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 using Models.DTO;
 using Models.Interfaces;
@@ -11,6 +12,7 @@ using Services;
 
 namespace AppMvc.Controllers;
 
+[Authorize] // Apply authorization to the entire controller
 public class GroupController : Controller
 {
     //Just like for WebApi
@@ -29,6 +31,7 @@ public class GroupController : Controller
     }
 
     #region ListOfGroups handling
+    [AllowAnonymous] // Allow anonymous access to view the list
     public async Task<IActionResult> ListOfGroups(int pagenr, string search)
     {
         //Create the viewModel
@@ -64,6 +67,7 @@ public class GroupController : Controller
         return RedirectToAction(nameof(ListOfGroups), new { pagenr, search = vm.SearchFilter });
     }
 
+    [AllowAnonymous] // Allow anonymous access to search
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SearchGroup(ListOfGroups vm)
@@ -82,6 +86,7 @@ public class GroupController : Controller
     #endregion
 
     #region ViewGroup handling
+    [AllowAnonymous] // Allow anonymous access to view individual groups
     public async Task<IActionResult> ViewGroup(Guid id) 
     {
         Guid _groupId = id;
