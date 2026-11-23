@@ -21,6 +21,12 @@ public class HomeController : Controller
         return View();
     }
 
+    public async Task<IActionResult> DataSourceInfo()
+    {
+        var vm = new DataSourceInfo(){Info = (await _service.GuestInfoAsync()).Item};
+        return View(vm);
+    }
+
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
     public IActionResult Error()
     {

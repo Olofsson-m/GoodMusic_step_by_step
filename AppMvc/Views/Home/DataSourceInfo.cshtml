@@ -1,0 +1,34 @@
+﻿@model AppMvc.ViewModels.DataSourceInfo
+@{
+    ViewData["Title"] = "Overview";
+}
+<!-- Page web-api-info -->
+<div class="container px-4 py-4" id="webapi-info">
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-5 g-4 py-5">
+    <div class="col d-flex align-items-start">
+        <svg class="bi text-body-secondary flex-shrink-0 me-3" width="1.75em" height="1.75em"><use xlink:href="#boombox"/></svg>
+        <div>
+        <h3 class="fw-bold mb-0 fs-4 text-body-emphasis">Music groups</h3>
+        <p>@(Model.Info.Db.NrSeededMusicGroups) seeded music groups</p>
+        <p>@(Model.Info.Db.NrUnseededMusicGroups) unseeded music groups</p>
+        </div>
+    </div>
+    <div class="col d-flex align-items-start">
+        <svg class="bi text-body-secondary flex-shrink-0 me-3" width="1.75em" height="1.75em"><use xlink:href="#album"/></svg>
+        <div>
+        <h3 class="fw-bold mb-0 fs-4 text-body-emphasis">Albums</h3>
+        <p>@(Model.Info.Db.NrSeededAlbums) seeded albums</p>
+        <p>@(Model.Info.Db.NrUnseededAlbums) unseeded albums</p>
+        </div>
+    </div>
+    <div class="col d-flex align-items-start">
+        <svg class="bi text-body-secondary flex-shrink-0 me-3" width="1.75em" height="1.75em"><use xlink:href="#artist"/></svg>
+        <div>
+        <h3 class="fw-bold mb-0 fs-4 text-body-emphasis">Artists</h3>
+        <p>@(Model.Info.Db.NrSeededArtists) seeded artists</p>
+        <p>@(Model.Info.Db.NrUnseededArtists) unseeded artists</p>
+        </div>
+    </div>
+    </div>
+</div>
+

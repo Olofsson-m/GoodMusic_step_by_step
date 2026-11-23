@@ -37,7 +37,7 @@ namespace AppRazor.Pages
                 }
                 await _admin_service.SeedAsync(NrOfItemsToSeed);
 
-                return RedirectToPage("/Index");
+                return RedirectToPage("/DataSourceInfo");
             }
 
             await LoadNrOfGroupsAsync();

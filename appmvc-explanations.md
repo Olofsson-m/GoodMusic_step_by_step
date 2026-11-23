@@ -1,155 +1,163 @@
 # AppMvc explanations
 
-> **Branch `5-data-seeding`.**
-> `AppMvc` started as the unmodified Microsoft ASP.NET Core MVC template (`dotnet new mvc`, .NET 10, branch `2-ms-apps-template`).
-> Branch `3-seido-apps-foundation` wired it to the rest of the software stack, and branch `4-apps-info` added environment information to the footer.
-> **This branch (`5-data-seeding`)** adds the first real feature: a *Seed* page that uses the `SeedGenerator` (through the service and repo layers) to generate test data and write it to the database.
-> This document explains the code structure and purpose, what changed from the template, and what is new in this branch.
+`AppMvc` is the ASP.NET Core **MVC** front-end of the GoodMusic solution (.NET 10). Pages are rendered on the server with Razor views; controllers handle requests and call the shared service layer (`Services` → `DbRepos` → `DbContext` → database).
+This document describes the code as it is in branch **`6-data-overview`**, with the emphasis on what this branch adds compared with the previous branch, `5-data-seeding`.
 
-## What is new in `5-data-seeding`
+---
 
-Files added or changed in AppMvc:
+## 1. This branch: Data overview (compared with `5-data-seeding`)
 
-| File | Change | Purpose |
+### Purpose
+The previous branch could *write* test data to the database (the Seed page). This branch adds the first page that **reads information from the database and presents it**: a *Data overview* page showing how many **seeded** and **unseeded** music groups, albums and artists the database contains. After seeding, the user is now taken straight to this page, so the effect of seeding is visible immediately.
+
+### Differences at a glance
+
+| File | Previous branch | This branch |
 |---|---|---|
-| [Controllers/SeedController.cs](AppMvc/Controllers/SeedController.cs) | new | Handles `GET`/`POST /Seed/Seed` |
-| [ViewModels/Seed.cs](AppMvc/ViewModels/Seed.cs) | new | View model for the Seed page |
-| [Views/Seed/Seed.cshtml](AppMvc/Views/Seed/Seed.cshtml) | new | The Seed form |
-| [Views/Shared/_Layout.cshtml](AppMvc/Views/Shared/_Layout.cshtml) | changed | New *Seed* link in the header menu |
+| [Controllers/HomeController.cs](AppMvc/Controllers/HomeController.cs) | `Index`, `Error` | + **`DataSourceInfo()`** action |
+| [ViewModels/DataSourceInfo.cs](AppMvc/ViewModels/DataSourceInfo.cs) | – | **new** view model |
+| [Views/Home/DataSourceInfo.cshtml](AppMvc/Views/Home/DataSourceInfo.cshtml) | – | **new** view |
+| [Views/Shared/_Layout.cshtml](AppMvc/Views/Shared/_Layout.cshtml) | menu: Home, Static, Seed | menu: Home, Static, **Data overview**, Seed |
+| [Controllers/SeedController.cs](AppMvc/Controllers/SeedController.cs) | after seeding → `Home/Index` | after seeding → **`Home/DataSourceInfo`** |
 
-### How seeding works end-to-end
+No changes were needed in `Program.cs`, the services or the database layers – everything the new page needs (`IAdminService`, `AdminDbRepos`, `MainDbContext`, the database view) already existed and is reused.
+
+### Request flow
 
 ```
-Browser ──GET /Seed/Seed──► SeedController.Seed()
-                              └─ NrOfGroupsAsync(): IAdminService.GuestInfoAsync() ─► AdminDbRepos.InfoAsync() ─► InfoDbView (counts)
-                              └─ new Seed { NrOfGroups = seeded + unseeded music groups }  ─► Views/Seed/Seed.cshtml
-
-Browser ──POST /Seed/Seed──► SeedController.Seed(Seed vm)   [ValidateAntiForgeryToken]
-                              ├─ (if vm.RemoveSeeds) IAdminService.RemoveSeedAsync(true) and RemoveSeedAsync(false)
-                              ├─ IAdminService.SeedAsync(vm.NrOfItemsToSeed)  ─► AdminDbRepos.SeedAsync(n)
-                              └─ RedirectToAction("Index", "Home")
+Browser ──GET /Home/DataSourceInfo──► HomeController.DataSourceInfo()
+   │                                     │ await _service.GuestInfoAsync()           (IAdminService, injected)
+   │                                     ▼
+   │                                  AdminServiceDb.GuestInfoAsync()  ── 1:1 ──►  AdminDbRepos.InfoAsync()
+   │                                                                                 │ _dbContext.InfoDbView.FirstAsync()
+   │                                                                                 ▼
+   │                                                                      database view gstusr.vwInfoDb  (one row, six counters)
+   │                                     ▲
+   │                                     │ ResponseItemDto<GstUsrInfoAllDto>.Item
+   │                                  new DataSourceInfo { Info = item }  → View(vm)
+   ◄── HTML (Views/Home/DataSourceInfo.cshtml inside _Layout.cshtml) ──┘
 ```
 
-All data access is done by the layers that were wired in branch 3; the controller only calls the service interface, exactly like the Web API controllers did.
+### The controller action
+```csharp
+public async Task<IActionResult> DataSourceInfo()
+{
+    var vm = new DataSourceInfo(){Info = (await _service.GuestInfoAsync()).Item};
+    return View(vm);
+}
+```
+- Follows the MVC conventions: the action name `DataSourceInfo` selects `Views/Home/DataSourceInfo.cshtml`, and the default route `{controller=Home}/{action=Index}/{id?}` makes it available as `/Home/DataSourceInfo` without any extra route configuration.
+- It is `async` because the whole call chain is asynchronous (EF Core `FirstAsync`), so the request thread is not blocked while the database is queried.
+- `IAdminService` was already injected in `HomeController`'s constructor; the controller only depends on the interface, not on the database implementation (`AdminServiceDb`), which is what later allows another implementation (e.g. one that uses the Web API) to be swapped in through DI.
+- `GuestInfoAsync()` returns a `ResponseItemDto<GstUsrInfoAllDto>`; only its `Item` is used. (In Debug builds the response also carries the connection string without password – it is not shown on the page.)
+- The action has no error handling of its own: if the database is unreachable, the exception propagates and – outside Development – is handled by `UseExceptionHandler("/Home/Error")`.
 
-### [SeedController.cs](AppMvc/Controllers/SeedController.cs)
-- Constructor injection of `IAdminService` and `ILogger<SeedController>`.
-- `[HttpGet] Seed()` – reads the current number of music groups (helper `NrOfGroupsAsync()`, based on `GuestInfoAsync()`: seeded + unseeded), puts it in a `Seed` view model and renders the view.
-- `[HttpPost] [ValidateAntiForgeryToken] Seed(Seed vm)` – if the model state is valid:
-  1. when `RemoveSeeds` is checked, calls `RemoveSeedAsync(true)` and `RemoveSeedAsync(false)` – this removes seeded **and** unseeded data, i.e. everything in the music tables;
-  2. calls `SeedAsync(vm.NrOfItemsToSeed)` to generate and store new data;
-  3. redirects to `Home/Index` with `RedirectToAction`.
-  If the model is invalid, `NrOfGroups` is loaded again (it is display-only and not posted by the form) and the view is re-rendered with the validation messages.
-- `Error()` is a copy of the action in `HomeController` returning the `Error` view model.
+### The view model
+```csharp
+public class DataSourceInfo
+{
+    public GstUsrInfoAllDto Info { get; set; }
+}
+```
+A deliberately thin class in the `ViewModels` folder (MVVM): the view depends on this type only, and the controller decides how it is filled. It wraps the DTO from the `Models` project instead of exposing database entities to the view. The file has some unused `using` directives.
 
-### [ViewModels/Seed.cs](AppMvc/ViewModels/Seed.cs)
-| Property | Default | Meaning |
+### The view
+[Views/Home/DataSourceInfo.cshtml](AppMvc/Views/Home/DataSourceInfo.cshtml) is typed with `@model AppMvc.ViewModels.DataSourceInfo` and sets `ViewData["Title"] = "Overview"`, which the layout uses in the `<title>` and header text.
+
+Structure of the markup:
+- `div.container` → `div.row.row-cols-1.row-cols-sm-2.row-cols-md-3.row-cols-lg-5` – a responsive Bootstrap grid (1 column on phones, up to 5 on large screens).
+- Three `div.col.d-flex` cards, one each for **Music groups**, **Albums** and **Artists**. Each has
+  - an icon: `<svg …><use xlink:href="#boombox"/></svg>` (`#album`, `#artist`) – these reference `<symbol>` definitions in the inline SVG sprite at the top of `_Layout.cshtml`, so no extra image requests are needed;
+  - a heading and two lines with Razor expressions, e.g. `@(Model.Info.Db.NrSeededMusicGroups) seeded music groups` and `@(Model.Info.Db.NrUnseededMusicGroups) unseeded music groups`. The parentheses make Razor treat the whole property path as one expression.
+- Razor HTML-encodes output by default; the values are integers, so there is no injection risk.
+
+### Layout and navigation
+In `_Layout.cshtml` a new menu item was added:
+```html
+<a asp-area="" asp-controller="Home" asp-action="DataSourceInfo" class="nav-link" aria-current="overview">Data overview</a>
+```
+The anchor tag helper generates the URL from controller/action through the routing system, so the link keeps working if the route pattern changes. (`aria-current="overview"` is not a valid ARIA value – valid values are `page`, `step`, `location`, `date`, `time`, `true` – and could be changed to `page`.)
+
+### The seed redirect
+`SeedController.Seed(Seed vm)` now ends a successful POST with `RedirectToAction("DataSourceInfo", "Home")`. The POST–redirect–GET pattern prevents the seed operation from being repeated if the user refreshes the page, and the overview shows the new counters.
+
+### Where the numbers come from (existing layers that the page reuses)
+
+| Layer | Code | Role |
 |---|---|---|
-| `NrOfGroups` | – | Current number of music groups (display only, set by the controller) |
-| `NrOfItemsToSeed` | `100` | Number of music groups to generate; `[Required]` with a custom message |
-| `RemoveSeeds` | `true` | Clear existing data before seeding |
+| Service | `AdminServiceDb.GuestInfoAsync()` | one-line delegate to the repo ("simple 1:1 calls … as Services expands, this will no longer need to be the case") |
+| Repo | `AdminDbRepos.InfoAsync()` → `DbInfo()` | `info.Db = await _dbContext.InfoDbView.FirstAsync();` wrapped in a `ResponseItemDto` |
+| DbContext | `DbSet<GstUsrInfoDbDto> InfoDbView` | `modelBuilder.Entity<GstUsrInfoDbDto>().ToView("vwInfoDb", "gstusr").HasNoKey();` – a **keyless** entity mapped to a database *view*, so EF Core only reads it and never tries to insert/update it |
+| Database | view `gstusr.vwInfoDb` (SQL scripts in `DbContext/SqlScripts`) | counts rows per table where `Seeded = 1` / `Seeded = 0` |
+| DTOs | `GstUsrInfoAllDto { GstUsrInfoDbDto Db }` and `GstUsrInfoDbDto` | six `int` counters: `NrSeededMusicGroups`, `NrUnseededMusicGroups`, `NrSeededAlbums`, `NrUnseededAlbums`, `NrSeededArtists`, `NrUnseededArtists` |
 
-A plain view model without `[BindProperty]`: that attribute only has an effect on controller/PageModel properties, and an action parameter (`Seed vm`) is bound from the form anyway.
+The SQL Server view:
+```sql
+CREATE OR ALTER VIEW gstusr.vwInfoDb AS
+    SELECT (SELECT COUNT(*) FROM supusr.MusicGroups WHERE Seeded = 1) as nrSeededMusicGroups,
+           (SELECT COUNT(*) FROM supusr.MusicGroups WHERE Seeded = 0) as nrUnseededMusicGroups,
+           ... same for Albums and Artists ...
+```
+Design points:
+- The view lives in the **`gstusr`** (guest user) schema, while the data tables are in `supusr`. This follows the solution's security model: the guest role may *read this summary* without having access to the tables themselves.
+- "**Seeded**" rows are those generated by `SeedGenerator` (flag `Seeded = 1`); "**unseeded**" rows are created by users. The distinction lets the seeding feature remove only generated data, and lets the overview show both.
+- The view always returns exactly one row, so `FirstAsync()` never throws "no elements" (counts are 0 on an empty database).
+- Because the query is a single aggregated row, the cost of the page does not grow with the number of rows returned – the database does the counting.
+- The same call is reused by the Seed page (`NrOfGroups` = seeded + unseeded music groups), and by `RemoveSeedAsync`, which returns the same info after deleting.
 
-### [Views/Seed/Seed.cshtml](AppMvc/Views/Seed/Seed.cshtml)
-- `@model Seed`, shows "the database contains N music groups".
-- A POST form with a text input for the number of items (`asp-for`, with `asp-validation-for` feedback) and a *Clear before seeding* checkbox; the submit button uses `asp-controller="Seed" asp-action="Seed"`.
-- Antiforgery protection: the form tag helper automatically adds a hidden `__RequestVerificationToken` field, and the POST action validates it with `[ValidateAntiForgeryToken]` (a post without the token is answered with `400`). A global `AutoValidateAntiforgeryTokenAttribute` filter would be an alternative once there are several POST actions.
-- The `script` section includes `_ValidationScriptsPartial` so client-side jQuery validation works.
+### Trying it
+1. Start the database and run AppMvc (profile `http` → `http://localhost:5204`).
+2. Open **Data overview** in the menu – the counters for the current database are shown.
+3. Open **Seed**, choose a number of items, submit – you are redirected to *Data overview* with updated numbers.
 
-### [_Layout.cshtml](AppMvc/Views/Shared/_Layout.cshtml)
-A *Seed* link (`asp-controller="Seed" asp-action="Seed"`) was added to the header menu next to *Home* and *Static*.
+---
 
-### What the seeding code in the lower layers does
-(Existing code from the earlier branches – nothing changed there in this branch.)
-- `AdminDbRepos.SeedAsync(n)` uses `SeedGenerator` (reads `./app-seeds.json`, the copy in the app's content root) to create `n` `MusicGroupDbM` objects, gives each of them a few albums (2–4) and picks 2–4 artists for each from a pool of 100 generated artists, adds them with `MusicGroups.AddRange` and calls `SaveChangesAsync`. Albums and artists are stored through EF navigation properties. The entities implement `ISeed<T>`, so they know how to fill themselves with random data, and are flagged `Seeded`.
-- `AdminDbRepos.RemoveSeedAsync(seeded)` calls the database stored procedure `supusr.spDeleteAll` (SQL Server, MySQL and PostgreSQL variants) which deletes seeded or unseeded rows.
-- `AdminDbRepos.InfoAsync()` reads the `InfoDbView` database view with the counts of seeded/unseeded music groups, albums and artists.
-- The operations run as the database user configured in `DatabaseConnections:DefaultDataUser` (shown in the footer, default `dbo`), so that user needs the required rights.
-
-## From branch 4 (`4-apps-info`)
-The footer in `_Layout.cshtml` shows three columns read from `IOptions<EnvironmentOptions>` (registered with `AddEnvironmentInfo()`): **Environment** (`ASPNETCORE_ENVIRONMENT`), **Secret** (secret source and id) and **Data** (active data set tag and default data user). No credentials are shown. It is a sanity check of which environment/database the app talks to – particularly useful now that the app can write to the database.
-
-## Summary of changes compared with the Microsoft template
-
-| Area | Microsoft template | Now |
-|---|---|---|
-| Project references | none | `Configuration`, `Encryptions`, `Models`, `Services` (+ `Microsoft.AspNetCore.Identity.UI` package) |
-| Nullable reference types | enabled | **disabled** (matches the rest of the solution) |
-| Startup ([Program.cs](AppMvc/Program.cs)) | `AddControllersWithViews` only | Secrets, encryption, database connections, DbContext, version/environment info, HttpClient, DbRepos and Services registered in DI |
-| Static files | `MapStaticAssets()` | classic `UseStaticFiles()` |
-| Authentication | `UseAuthorization()` only | `UseAuthentication()` + `UseAuthorization()` (ready for the security branches) |
-| Routing | `MapControllerRoute(...)` | `MapDefaultControllerRoute()` + route aliases `/version`, `/static` |
-| Controllers | `HomeController`: `Index`, `Privacy`, `Error` | `HomeController`: `Index`, `Error`; **`SeedController` (branch 5)** |
-| View models | `Models/ErrorViewModel` | `ViewModels/Error`, **`ViewModels/Seed` (branch 5)** |
-| Layout / UI | Bootstrap navbar + footer | Custom Seido layout: SVG icons, modals, own CSS/JS; footer with environment info (branch 4); **Seed menu link (branch 5)** |
-| Configuration | logging only | secret storage, database connections, data service (Database vs WebApi) |
-| Helpers | none | `SeidoHelpers/SeidoHelpers.cs` |
-| Removed | – | `Privacy` page, `appsettings.Development.json`, `site.css`, `site.js`, `favicon.ico`, `Models/ErrorViewModel.cs` |
-
-## Project structure
+## 2. Application structure (current)
 
 ```
 AppMvc/
-├── AppMvc.csproj                 Project references to Configuration, Encryptions, Models, Services; Nullable disabled
+├── AppMvc.csproj                 References Configuration, Encryptions, Models, Services; Nullable disabled
 ├── Program.cs                    DI registrations and HTTP pipeline
 ├── appsettings.json              Secrets, DatabaseConnections and DataService settings
-├── app-seeds.json                Source data for SeedGenerator (quotes, names, music, ...)
+├── app-seeds.json                Source data for SeedGenerator
 ├── Properties/launchSettings.json  Profiles http :5204, https :7029, IIS Express
 ├── Controllers/
-│   ├── HomeController.cs         Index + Error
-│   └── SeedController.cs         Seed (GET/POST)                                  <- branch 5
-├── ViewModels/
-│   ├── Error.cs                  View model for the error view (RequestId)
-│   └── Seed.cs                   View model for the Seed page                      <- branch 5
+│   ├── HomeController.cs         Index, DataSourceInfo, Error
+│   └── SeedController.cs         Seed (GET/POST)
+├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs
 ├── SeidoHelpers/SeidoHelpers.cs  Extension methods for model validation and enum select lists
 ├── Views/
 │   ├── _ViewImports.cshtml       @using AppMvc / AppMvc.ViewModels + tag helpers
 │   ├── _ViewStart.cshtml         Sets _Layout
-│   ├── Home/Index.cshtml         Welcome page
-│   ├── Seed/Seed.cshtml          Seed form                                         <- branch 5
-│   └── Shared/
-│       ├── _Layout.cshtml        Master page (header/menu, modals, footer with environment info, scripts)
-│       ├── _Layout.cshtml.css    Scoped CSS
-│       ├── Error.cshtml          Error view typed to ViewModels.Error
-│       └── _ValidationScriptsPartial.cshtml  jQuery validation, configured for Bootstrap classes
-└── wwwroot/
-    ├── index.html                Plain static page outside MVC routing (reachable via /static)
-    ├── css/                      features.css, grid.css, modals.css, navbars-offcanvas.css, sign-in.css
-    ├── js/seido/                 modals.js, select-list-items.js
-    ├── favicon_io/               Favicon set + web manifest
-    └── lib/                      Bootstrap, jQuery, jquery-validation(-unobtrusive)
+│   ├── Home/                     Index.cshtml, DataSourceInfo.cshtml
+│   ├── Seed/Seed.cshtml          Seed form
+│   └── Shared/                   _Layout.cshtml (+ .css), Error.cshtml, _ValidationScriptsPartial.cshtml
+└── wwwroot/                      index.html, css/, js/seido/, favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
 ```
 
-## Details from the foundation (branch 3)
-
-### [AppMvc.csproj](AppMvc/AppMvc.csproj)
-Project references to `Configuration`, `Encryptions`, `Models` and `Services` (which brings in `DbRepos`, `DbContext` and `DbModels`), the `Microsoft.AspNetCore.Identity.UI` package for later security branches, and `<Nullable>disable</Nullable>`.
-
 ### [Program.cs](AppMvc/Program.cs)
-Service registration: `AddControllersWithViews()`, `AddSecrets(env)` (user secrets or Azure Key Vault via `ApplicationSecrets:SecretStorage`), `AddEncryptions`, `AddDatabaseConnections`, `AddUserBasedDbContext`, `AddVersionInfo`, `AddEnvironmentInfo`, a named `HttpClient` "MusicWebApi" (`DataService:WebApiBaseUri`), and scoped DbRepos and services (`IAdminService`→`AdminServiceDb`, `IMusicGroupsService`→`MusicGroupsServiceDb`, `IAlbumsService`→`AlbumsServiceDb`, `IArtistsService`→`ArtistsServiceDb`). Because `IAdminService` is registered here, `SeedController` can simply inject it.
-
-Pipeline: `UseHsts` + `UseExceptionHandler("/Home/Error")` outside Development, `UseHttpsRedirection`, `UseStaticFiles`, `UseRouting`, `UseAuthentication`, `UseAuthorization`, `MapDefaultControllerRoute()` (`{controller=Home}/{action=Index}/{id?}`, which also routes `/Seed/Seed`), and aliases `/version` (JSON `VersionOptions`) and `/static` (redirect to `/index.html`).
+- **Services:** `AddControllersWithViews()`; `AddSecrets(env)` (user secrets or Azure Key Vault, chosen by `ApplicationSecrets:SecretStorage`); `AddEncryptions`; `AddDatabaseConnections`; `AddUserBasedDbContext`; `AddVersionInfo` and `AddEnvironmentInfo`; a named `HttpClient` "MusicWebApi" (`DataService:WebApiBaseUri`); scoped DbRepos and services (`IAdminService`→`AdminServiceDb`, `IMusicGroupsService`→`MusicGroupsServiceDb`, `IAlbumsService`→`AlbumsServiceDb`, `IArtistsService`→`ArtistsServiceDb`).
+- **Pipeline:** `UseHsts` + `UseExceptionHandler("/Home/Error")` outside Development, `UseHttpsRedirection`, `UseStaticFiles`, `UseRouting`, `UseAuthentication`, `UseAuthorization`, `MapDefaultControllerRoute()`; aliases `/version` (JSON with version info) and `/static` (redirect to `/index.html`).
 
 ### [appsettings.json](AppMvc/appsettings.json)
-`ApplicationSecrets:SecretStorage`, `DatabaseConnections` (`DefaultDataUser` `dbo`, `MigrationUser` `root`, `UseDataSetWithTag` `sql-music.sqlserver.docker`) and `DataService` (`DataSource`, `WebApiBaseUri`). Connection strings and credentials are in secrets.
+`ApplicationSecrets:SecretStorage`, `DatabaseConnections` (`DefaultDataUser`, `MigrationUser`, `UseDataSetWithTag`) and `DataService` (`DataSource`, `WebApiBaseUri`). Connection strings and credentials are kept in secrets, not in this file.
 
-### Other files
-- [HomeController.cs](AppMvc/Controllers/HomeController.cs) injects `ILogger` and `IAdminService`; `Index()` and `Error()`.
-- [ViewModels/Error.cs](AppMvc/ViewModels/Error.cs) – moved from `Models/ErrorViewModel`; `ViewModels` separates web-app view models (MVVM) from the domain `Models` project.
-- [SeidoHelpers.cs](AppMvc/SeidoHelpers/SeidoHelpers.cs) – `ModelStateDictionary.IsValidPartially(...)` and `List<SelectListItem>.PopulateSelectList<TEnum>()` (not used yet).
-- `_Layout.cshtml` – Seido layout with favicons, Bootstrap, SVG icons, three reusable modals (`softModal`, `hardModal`, `dangerModal`), footer and an optional `script` section.
-- `wwwroot/js/seido/modals.js` and `select-list-items.js` – data-attribute driven helpers for modals and selected items (not used yet).
+### Layout and footer
+`_Layout.cshtml` is the common page frame: favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu, three reusable Bootstrap modals (`softModal`, `hardModal`, `dangerModal`), and a footer. The footer shows **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user), read from `IOptions<EnvironmentOptions>` – a quick check of which environment and database the app is talking to. No credentials are displayed.
 
-## Request flow (example)
+### Seed page
+`SeedController` + `ViewModels/Seed.cs` + `Views/Seed/Seed.cshtml`:
+- `GET /Seed/Seed` shows the current number of music groups; `POST` validates the form, optionally removes all existing data (`RemoveSeedAsync(true)` and `(false)` – seeded **and** unseeded), calls `SeedAsync(n)` and redirects to the overview.
+- The POST action has `[ValidateAntiForgeryToken]`; the form tag helper adds the matching hidden `__RequestVerificationToken` field.
+- `SeedAsync(n)` uses `SeedGenerator` with `app-seeds.json` to create `n` music groups, each with 2–4 albums and 2–4 artists picked from 100 generated artists. Operations run as `DatabaseConnections:DefaultDataUser`.
 
-`POST /Seed/Seed` (form with antiforgery token) → routing → antiforgery validation → `SeedController.Seed(Seed vm)` (model bound from the form, `IAdminService` from DI) → `AdminServiceDb` → `AdminDbRepos` (`SeedGenerator` + `MainDbContext`) → database → redirect to `/Home/Index`.
+### Other
+- `SeidoHelpers.cs`: `ModelStateDictionary.IsValidPartially(...)` and `List<SelectListItem>.PopulateSelectList<TEnum>()`.
+- `wwwroot/js/seido/modals.js` and `select-list-items.js`: data-attribute driven helpers for the modals and for selecting list items.
 
-## Context in the solution
+---
 
-- `AppWebApi` has been removed from the solution; the same service layer previously used by the Web API controllers is now called directly from the MVC controller.
-- `AppMvc` and [AppRazor](apprazor-explanations.md) share the same configuration, startup registrations, helpers, look, footer and Seed feature; they differ in the page model (controllers/views vs. Razor Pages).
+## 3. Context and next steps
 
-## What comes next
-
-The coming branches will build on this: database overview and listing pages for music groups, albums and artists (with paging, search, view, edit and delete), CRUD with the modals and validation helpers, and authentication/authorization using the already prepared pipeline.
+- `AppMvc` and [AppRazor](apprazor-explanations.md) offer the same features on top of the same service layer; they differ in the page model (controllers/views here, Razor Pages there).
+- Next: list pages for music groups, albums and artists (paging, search, view, edit, delete) through the injected services, CRUD with the modals and validation helpers, and authentication/authorization using the already prepared pipeline.

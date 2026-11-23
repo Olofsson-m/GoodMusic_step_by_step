@@ -38,7 +38,7 @@ public class SeedController : Controller
             }
 
             await _admin_service.SeedAsync(vm.NrOfItemsToSeed);
-            return RedirectToAction("Index", "Home");
+            return RedirectToAction("DataSourceInfo", "Home");
         }
 
         vm.NrOfGroups = await NrOfGroupsAsync();
