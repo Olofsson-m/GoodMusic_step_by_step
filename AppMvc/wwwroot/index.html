@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-bs-theme="auto">
+<head>
+
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="Martin Lenart, Seido AB">
+    <title>SimpleStatic</title>
+
+    <link rel="apple-touch-icon" sizes="180x180" href="/favicon_io/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon_io/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon_io/favicon-16x16.png">
+    <link rel="manifest" href="/favicon_io/site.webmanifest">
+
+
+    <!-- Bootstrap styles from their website -->
+    <link href="/lib/bootstrap/dist/css/bootstrap.css" rel="stylesheet">
+</head>
+
+  <body>
+    <main>
+      <div class="container px-4 py-4" id="home">
+        <div class="bg-body-tertiary p-5 rounded">
+          <div class="col-sm-8 py-5 mx-auto">
+            <h1 class="display-5 fw-normal">Simple static</h1>
+              <p class="fs-5">This is a simple static page using minimal bootstrap css and js</p>
+              <p>This page is intentionally kept as simple html outside Razor and MVC routing</p>
+              <p>Bootstrap version: <span id="bsVersion"></span></p>
+              <p>Bootstrap js used: <span id="bsJs"></span></p>
+              <p>Bootstrap css used: <span id="bsCss"></span></p>
+        </div>
+      </div>
+      </div>
+    </main>
+
+    <script src="/lib/bootstrap/dist/js/bootstrap.js"></script>
+    <script>
+      document.getElementById('bsVersion').textContent = bootstrap.Tooltip.VERSION;
+      document.getElementById('bsJs').textContent = document.querySelector('script[src*="bootstrap"]').getAttribute('src');
+      document.getElementById('bsCss').textContent = document.querySelector('link[href*="bootstrap"]').getAttribute('href');
+    </script>
+  </body>
+</html>

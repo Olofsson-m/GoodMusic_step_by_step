@@ -1,5 +1,4 @@
 <Solution>
-  <Project Path="AppRazor\AppRazor.csproj" />
   <Project Path="Configuration\Configuration.csproj" />
   <Project Path="Encryptions\Encryptions.csproj" />
   <Project Path="Models\Models.csproj" />
@@ -8,4 +7,5 @@
   <Project Path="DbRepos\DbRepos.csproj" />
   <Project Path="Services\Services.csproj" />
   <Project Path="AppMvc\AppMvc.csproj" />
+  <Project Path="AppRazor\AppRazor.csproj" />
 </Solution>
