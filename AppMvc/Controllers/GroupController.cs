@@ -29,20 +29,18 @@ public class GroupController : Controller
     }
 
     #region ListOfGroups handling
-    public async Task<IActionResult> ListOfGroups()
+    public async Task<IActionResult> ListOfGroups(int pagenr)
     {
         //Create the viewModel
-        var vm = new ListOfGroups();
+        var vm = new ListOfGroups() { ThisPageNr = pagenr };
 
-        //Read one group to get the total count of groups in the database
-        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, null, 0, 1);
+        //Use the Service
+        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, null, vm.ThisPageNr, vm.PageSize);
         vm.MusicGroups = _resp.PageItems;
         vm.NrOfGroups = _resp.DbItemsCount;
 
-        //Read all groups from the database 
-        _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, null, 0, vm.NrOfGroups);
-        vm.MusicGroups = _resp.PageItems;
-        vm.NrOfGroups = _resp.DbItemsCount;
+        //Pagination
+        vm.UpdatePagination(_resp.DbItemsCount);
 
         //Render the View
         return View(vm);
