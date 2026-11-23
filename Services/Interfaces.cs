@@ -37,4 +37,3 @@ public interface IArtistsService
     public Task<ResponseItemDto<IArtist>> CreateArtistAsync(ArtistCUdto item);
 }
 
-
