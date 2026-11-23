@@ -45,6 +45,9 @@ builder.Services.AddHttpClient(name: "MusicWebApi", configureClient: options =>
             quality: 1.0));
 });
 
+//Used for Identity email verification
+builder.Services.AddTransient<Microsoft.AspNetCore.Identity.UI.Services.IEmailSender, EmailService>();
+
 //Inject DbRepos and Services
 builder.Services.AddScoped<AdminDbRepos>();
 builder.Services.AddScoped<MusicGroupsDbRepos>();
