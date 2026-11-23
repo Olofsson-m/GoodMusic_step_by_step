@@ -1,96 +1,133 @@
 # AppMvc explanations
 
 `AppMvc` is the ASP.NET Core **MVC** front-end of the GoodMusic solution (.NET 10). Pages are rendered on the server with Razor views; controllers handle requests and call the shared service layer (`Services` → `DbRepos` → `DbContext` → database).
-This document describes the code as it is in branch **`9-view-list-item`**, with the emphasis on what this branch adds compared with the previous branch, `8-list-pagination`.
+This document describes the code as it is in branch **`10-list-search`**, with the emphasis on what this branch adds compared with the previous branch, `9-view-list-item`.
 
 ---
 
-## 1. This branch: Detail view of a music group (compared with `8-list-pagination`)
+## 1. This branch: Searching the group list (compared with `9-view-list-item`)
 
 ### Purpose
-The paged list showed only the *names* of the groups. This branch adds a **detail page for one group** – name, genre, established year, its **artists** and its **albums** – and turns each name in the list into a **link** to that page. It is the first page that works on a single item identified by its id.
+The paged list could only show the groups in database order. This branch adds a **search box** above the list: the user types a word, and only the groups that match are listed (still paged, 10 per page). The search is carried through the page links, so the filtered result can be paged through, bookmarked and shared. Two short URLs (`/rock`, `/queen`) are added as ready-made searches.
 
 ### Differences at a glance
 
 | File | Previous branch | This branch |
 |---|---|---|
-| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups(int pagenr)` | + **`ViewGroup(Guid id)`** action |
-| [ViewModels/ViewGroup.cs](AppMvc/ViewModels/ViewGroup.cs) | – | **new** view model (one property: `IMusicGroup MusicGroup`) |
-| [Views/Group/ViewGroup.cshtml](AppMvc/Views/Group/ViewGroup.cshtml) | – | **new** read-only detail view |
-| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | group names as plain text | each name is a **link** `asp-controller="Group" asp-action="ViewGroup" asp-route-id="@item.MusicGroupId"` |
+| [Controllers/GroupController.cs](AppMvc/Controllers/GroupController.cs) | `ListOfGroups(int pagenr)` – filter always `null` | `ListOfGroups(int pagenr, string search)` passes the filter on; + **`SearchGroup(ListOfGroups vm)`** (POST) |
+| [ViewModels/ListOfGroups.cs](AppMvc/ViewModels/ListOfGroups.cs) | paging state | + **`SearchFilter`** (the text typed by the user) |
+| [Views/Group/ListOfGroups.cshtml](AppMvc/Views/Group/ListOfGroups.cshtml) | list + pagination bar | + a **`<form method="post">`** with *Use seeded data* checkbox, search box and *Search* button; pagination links also carry `asp-route-search`; the count is shown |
+| [Program.cs](AppMvc/Program.cs) | aliases `/version`, `/static` | + aliases **`/rock`** and **`/queen`** |
 
-`Program.cs`, the layout and the service layer are unchanged. The detail page is not in the menu; it is reached only by clicking a group in the list.
+The service and repository layers are unchanged: `ReadMusicGroupsAsync(seeded, flat, filter, pageNumber, pageSize)` already had a `filter` parameter, which the previous branches passed as `null`.
 
-### Request flow
+### Two ways to search – GET and POST
 
 ```
-Browser ──click "The Floyd …" in the list──► GET /Group/ViewGroup/9ad6a0fb-…   (also works as /Group/ViewGroup?id=9ad6a0fb-…)
-   │                                           ▼
-   │                                      GroupController.ViewGroup(Guid id)
-   │                                           │ _mg_service.ReadMusicGroupAsync(id, flat: false)
-   │                                           ▼
-   │                                      MusicGroupsServiceDb ── 1:1 ──► MusicGroupsDbRepos.ReadMusicGroupAsync(id, false)
-   │                                           │ _dbContext.MusicGroups.AsNoTracking()
-   │                                           │     .Include(ArtistsDbM).Include(AlbumsDbM).Where(MusicGroupId == id).FirstOrDefaultAsync()
-   │                                           ▼
-   │                                      ResponseItemDto<IMusicGroup>.Item  (group + artists + albums)
-   │                                      vm = new ViewGroup { MusicGroup = Item }  → View(vm)
-   ◄── HTML (Views/Group/ViewGroup.cshtml inside _Layout.cshtml) ──┘
-```
+(A) Search from the form (POST)
+Browser ──POST /Group/SearchGroup (SearchFilter, UseSeeds, antiforgery token)──► GroupController.SearchGroup(ListOfGroups vm)
+   │                                         │ ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr (=0), vm.PageSize)
+   │                                         │ vm.UpdatePagination(...)
+   ◄── HTML (View("ListOfGroups", vm)) ─────┘   first page of the result
 
-### The link in the list
+(B) Page links / bookmarks / aliases (GET)
+Browser ──GET /Group/ListOfGroups?pagenr=2&search=Rock──► GroupController.ListOfGroups(int pagenr, string search)
+   │                                         │ vm = new ListOfGroups { ThisPageNr = 2, SearchFilter = "Rock" }
+   │                                         │ ReadMusicGroupsAsync(true, false, "Rock", 2, 10) → UpdatePagination
+   ◄── HTML ───────────────────────────────┘
+
+/rock ─302─► /Group/ListOfGroups?search=Rock        /queen ─302─► /Group/ListOfGroups?search=Queen
+```
+The search *form* posts (A); everything else – paging, bookmarks and the aliases – uses GET (B) with the filter in the query string. Both end in the same view and use the same view model.
+
+### The form in the view
 ```cshtml
-<a asp-controller="Group" asp-action="ViewGroup" asp-route-id="@item.MusicGroupId">@item.Name</a>
+<form method="post" class="needs-validation" novalidate>
+    <input asp-for="UseSeeds" class="form-check-input" type="checkbox" id="useSeeds"> Use seeded data
+    <input asp-for="SearchFilter" class="form-control" type="search" placeholder="Search" aria-label="Search">
+    <button asp-controller="Group" asp-action="SearchGroup" class="btn btn-outline-success" type="submit">Search</button>
+    <input type="hidden" name="groupId" data-seido-selected-item-id-target />
+    ...list and pagination bar...
+</form>
 ```
-The anchor tag helper builds the URL from the controller/action names and route values. Because the default route is `{controller=Home}/{action=Index}/{id?}`, the **`id` route value becomes a URL segment**: `/Group/ViewGroup/9ad6a0fb-27b9-4062-9e6e-00ad03ec77a0`. This is a plain GET link – bookmarkable and shareable.
+- **`asp-for`** binds each input to a view-model property: it generates `name`/`id`/`value` (and for the bool, a hidden companion field so an *unchecked* box posts `false`). After a POST the text box shows the same text again, because the view model is rendered back.
+- **`asp-controller` / `asp-action` on the button** make the button submit this form to `/Group/SearchGroup` instead of the form's own URL (rendered as a `formaction` attribute). The form itself has no action. This pattern lets one form contain several buttons with different targets – used in later pages.
+- **Antiforgery:** the form tag helper automatically adds a hidden `__RequestVerificationToken` field, and the action has `[ValidateAntiForgeryToken]`; a POST without the token is answered with `400`.
+- The hidden `groupId` input with `data-seido-selected-item-id-target` is a placeholder that `wwwroot/js/seido/select-list-items.js` fills when an item is selected; it is not used by this branch's functionality.
+- A `<p>` above the form now shows `NrOfGroups`: *"The database contains N music groups the search criteria"* – the count of matching groups (the word *with* is missing in the text).
 
-### The controller action
+### The controller
 ```csharp
-public async Task<IActionResult> ViewGroup(Guid id)
+public async Task<IActionResult> ListOfGroups(int pagenr, string search)
 {
-    Guid _groupId = id;
-    var mg = await _mg_service.ReadMusicGroupAsync(_groupId, false);
-    var vm = new ViewGroup() { MusicGroup = mg.Item };
+    var vm = new ListOfGroups() { ThisPageNr = pagenr, SearchFilter = search };
+    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
+    vm.MusicGroups = _resp.PageItems;  vm.NrOfGroups = _resp.DbItemsCount;
+    vm.UpdatePagination(_resp.DbItemsCount);
     return View(vm);
 }
+
+[HttpPost]
+[ValidateAntiForgeryToken]
+public async Task<IActionResult> SearchGroup(ListOfGroups vm)
+{
+    var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
+    vm.MusicGroups = _resp.PageItems;  vm.NrOfGroups = _resp.DbItemsCount;
+    vm.UpdatePagination(_resp.DbItemsCount);
+    return View("ListOfGroups", vm);
+}
 ```
-- **Model binding of the id:** the action parameter `Guid id` is bound from the route segment (`/Group/ViewGroup/<guid>`) or from the query string (`?id=<guid>`) – both work. The `{id?}` part of the default route is what the segment form relies on. The commented-out line in the code shows the manual alternative, `Guid.Parse(Request.Query["id"])`.
-- **Full object graph:** `flat: false` makes the repo load the group **together with its artists and albums** (`.Include(...)`), which is exactly what the page needs. With `flat: true` only the group's own columns would be read and the artist and album lists would be empty.
-- **Read-only query:** the repo uses `AsNoTracking()`, since nothing is going to be modified; this is cheaper and avoids circular-reference problems when entities reference each other (group ↔ artists).
-- **Interface-typed result:** the service returns `IMusicGroup` (from the `Models` project) with `Name`, `Genre`, `EstablishedYear`, `Albums` and `Artists`, so the web app never touches the EF entity classes.
-- **Naming:** the action is called `ViewGroup`, as is the view model class; inside the controller `ViewGroup` as a *type* (in `new ViewGroup()`) and as a *method name* coexist without conflict.
-- The injected `IAlbumsService` and `IArtistsService` are not needed here – the albums and artists come with the group.
+- **Binding:** in the GET action, `pagenr` and `search` are bound from the query string; in the POST action, MVC binds the **whole view model** from the posted form fields (`SearchFilter`, `UseSeeds`; `ThisPageNr` is not in the form, so it stays 0 and a new search always starts at the first page). No `[BindProperty]` is needed on a model that is an action parameter.
+- **Returning another view:** `View("ListOfGroups", vm)` names the view explicitly; `View(vm)` would look for a view called `SearchGroup`.
+- Both actions repeat the same read-and-paginate steps – a candidate for a small private helper.
+- `SearchGroup` returns the page directly from the POST (no redirect). That is simple, but the browser shows `/Group/SearchGroup`, and *refreshing* asks the user to re-submit the form. The GET links (below) avoid this.
 
 ### The view model
 ```csharp
-public class ViewGroup { public IMusicGroup MusicGroup { get; set; } }
+public bool UseSeeds { get; set; } = true;
+public string SearchFilter { get; set; } = null;   // "ModelBinding for the form"
 ```
-A thin wrapper in `ViewModels/`, following the same MVVM pattern as the other pages: the view depends only on this type. Here it simply exposes the whole `IMusicGroup`, because the page is a faithful read-only presentation of that object.
+`SearchFilter` is the new property: it is posted from the text box, passed in from the query string by the GET action, handed to the service and rendered back into the text box and the page links.
 
-### The view
-[Views/Group/ViewGroup.cshtml](AppMvc/Views/Group/ViewGroup.cshtml) is typed with `@model ViewGroup`, title *View group*. It has three sections, all inside a `<form class="needs-validation" novalidate>`:
-1. **Group details** – three `<input type="text" class="form-control" … readonly>` fields with the group's **name**, **genre** and **established year** (`value="@Model.MusicGroup.Name"` etc.). `readonly` shows the values in form-control styling but prevents editing; this layout is reused as the basis for an edit form.
-2. **Artists** – a heading and a grid with a header cell *Name*, then a `foreach` over `Model.MusicGroup.Artists` that prints `@item.FirstName @item.LastName` in a `themed-grid-col` cell.
-3. **Albums** – a grid with header cells *Name* and *Release Year*, then a `foreach` over `Model.MusicGroup.Albums` printing `@item.Name` (`col-md-10`) and `@item.ReleaseYear` (`col-md-2`).
+### How the filter is applied (repository)
+```csharp
+filter ??= "";
+.Where(i => i.Seeded == seeded &&
+            (i.Name.ToLower().Contains(filter) ||
+             i.strGenre.ToLower().Contains(filter) ||
+             i.EstablishedYear.ToString().Contains(filter)))
+```
+- A group matches if the text occurs in its **name, genre or established year** (substring match). `null` is treated as `""`, which matches everything.
+- The same `Where` is used for both the `CountAsync()` (total hits, used for paging) and the page query (`Skip/Take`), so `NrOfGroups` and the page links always reflect the *filtered* result.
+- The filter is translated to SQL `LIKE '%…%'` and runs in the database; special characters are parameterised, so it is safe against SQL injection.
+- **Case:** the C# side lowercases the *column*, not the filter text; case-insensitive matching therefore relies on the database collation (SQL Server's default is case-insensitive: `Rock` and `rock` both give 30 hits). On a case-sensitive collation, uppercase search words would not match.
 
-Notes:
-- Bootstrap grid classes (`row`, `col-sm-6`, `col-md-10`, `col-md-2`, `g-3`) lay the page out responsively; `themed-grid-head-col` / `themed-grid-col` come from `wwwroot/css/grid.css`.
-- Razor HTML-encodes all values (including inside the `value="…"` attributes), so data from the database cannot inject markup.
-- The `<form>` has no action, method or inputs that post anything; it is only a container for Bootstrap's form styling. There is nothing to submit and therefore no antiforgery handling is needed on this page.
-- `<label for="…">` is connected to each input via `id`, which is good for accessibility.
+Examples against the seeded sample data (100 groups): `Rock` → 30 groups (genre or name), `Jazz` → 22, `Floyd` → 17, `1986` → 1 (established year), `zzzz` → 0, empty → 100.
 
-### Error behaviour (verified)
-| Request | Result |
-|---|---|
-| `/Group/ViewGroup/<existing guid>` or `?id=<existing guid>` | 200 – details shown |
-| `/Group/ViewGroup/<well-formed guid that does not exist>` | **500** – the repo throws `ArgumentException("Item … is not existing")` |
-| `/Group/ViewGroup` (no id) or a malformed id (`not-a-guid`) | **500** – `id` becomes `Guid.Empty`, which does not exist |
+### Pagination keeps the search
+Every page link now carries the filter:
+```cshtml
+<a class="page-link" asp-controller="Group" asp-action="ListOfGroups" asp-route-pagenr="@i" asp-route-search="@Model.SearchFilter">@(i + 1)</a>
+```
+`asp-route-search` is added to the query string (`?pagenr=1&search=Rock`); when `SearchFilter` is `null` the parameter is simply omitted. This is why the paged result is a GET link: it is bookmarkable and works with the browser's back button, which the POST result is not.
 
-Outside Development, such exceptions are routed to `/Home/Error` (`UseExceptionHandler`), but a friendlier result would be `NotFound()` when the item does not exist (e.g. by catching the exception or checking for it in the action).
+### The aliases
+```csharp
+app.MapGet("/rock",  () => Results.Redirect("/Group/ListOfGroups?search=Rock"));
+app.MapGet("/queen", () => Results.Redirect("/Group/ListOfGroups?search=Queen"));
+```
+Minimal-API endpoints in `Program.cs` that answer with an HTTP 302 redirect to the search URL – handy short links (`/rock`) to a pre-filtered list, and a demonstration that the search can be driven entirely through the query string.
+
+### Behaviour and limitations to be aware of
+- **"Use seeded data" is not carried by the page links:** it is posted by the form, but the pagination links only carry `pagenr` and `search`. After unchecking the box, a search shows the unseeded rows (none in a freshly seeded database → 0 hits), but clicking a page number goes back to seeded data.
+- **No results:** with 0 hits `NrOfPages` is 0 and the « / » links point to `pagenr=-1`; following one gives HTTP 500, because a negative page number is not validated (see the pagination notes: clamp `pagenr` with `Math.Max(0, pagenr)`).
+- **No live feedback:** the search runs when the button is pressed (Enter inside the text box also submits, using the form's first submit button).
+- The *Use seeded data* label is empty and the text *"Use seeded data"* is written after the checkbox – cosmetic; the label `for` does not wrap the text.
 
 ### Trying it
-1. Open **Famous groups** and click a group name.
-2. The detail page shows name, genre and year plus the group's artists and albums; use the browser's back button to return to the same list page.
+1. Open **Famous groups**, type `Rock` and press **Search**: the count line shows 30 and the first 10 matches are listed.
+2. Click page *2*: the URL is `/Group/ListOfGroups?pagenr=1&search=Rock` and the filter is preserved.
+3. Open `/queen` – you are redirected to the list filtered on `Queen`.
 
 ---
 
@@ -99,21 +136,21 @@ Outside Development, such exceptions are routed to `/Home/Error` (`UseExceptionH
 ```
 AppMvc/
 ├── AppMvc.csproj                 References Configuration, Encryptions, Models, Services; Nullable disabled
-├── Program.cs                    DI registrations and HTTP pipeline
+├── Program.cs                    DI registrations, HTTP pipeline, aliases /version /static /rock /queen
 ├── appsettings.json              Secrets, DatabaseConnections and DataService settings
 ├── app-seeds.json                Source data for SeedGenerator
 ├── Properties/launchSettings.json  Profiles http :5204, https :7029, IIS Express
 ├── Controllers/
 │   ├── HomeController.cs         Index, DataSourceInfo, Error
 │   ├── SeedController.cs         Seed (GET/POST)
-│   └── GroupController.cs        ListOfGroups(pagenr), ViewGroup(id)
-├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs, ListOfGroups.cs (with pagination), ViewGroup.cs
+│   └── GroupController.cs        ListOfGroups(pagenr, search), SearchGroup (POST), ViewGroup(id)
+├── ViewModels/                   Error.cs, Seed.cs, DataSourceInfo.cs, ListOfGroups.cs (paging + search), ViewGroup.cs
 ├── SeidoHelpers/SeidoHelpers.cs  Extension methods for model validation and enum select lists
 ├── Views/
 │   ├── _ViewImports.cshtml       @using AppMvc / AppMvc.ViewModels + tag helpers
 │   ├── _ViewStart.cshtml         Sets _Layout
 │   ├── Home/                     Index.cshtml, DataSourceInfo.cshtml
-│   ├── Group/                    ListOfGroups.cshtml (paged list with links), ViewGroup.cshtml (details)
+│   ├── Group/                    ListOfGroups.cshtml (search form, paged list), ViewGroup.cshtml (details)
 │   ├── Seed/Seed.cshtml          Seed form
 │   └── Shared/                   _Layout.cshtml (+ .css), Error.cshtml, _ValidationScriptsPartial.cshtml
 └── wwwroot/                      index.html, css/ (incl. grid.css), js/seido/, favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
@@ -121,7 +158,7 @@ AppMvc/
 
 ### [Program.cs](AppMvc/Program.cs)
 - **Services:** `AddControllersWithViews()`; `AddSecrets(env)` (user secrets or Azure Key Vault, chosen by `ApplicationSecrets:SecretStorage`); `AddEncryptions`; `AddDatabaseConnections`; `AddUserBasedDbContext`; `AddVersionInfo` and `AddEnvironmentInfo`; a named `HttpClient` "MusicWebApi" (`DataService:WebApiBaseUri`); scoped DbRepos and services (`IAdminService`→`AdminServiceDb`, `IMusicGroupsService`→`MusicGroupsServiceDb`, `IAlbumsService`→`AlbumsServiceDb`, `IArtistsService`→`ArtistsServiceDb`).
-- **Pipeline:** `UseHsts` + `UseExceptionHandler("/Home/Error")` outside Development, `UseHttpsRedirection`, `UseStaticFiles`, `UseRouting`, `UseAuthentication`, `UseAuthorization`, `MapDefaultControllerRoute()`; aliases `/version` (JSON with version info) and `/static` (redirect to `/index.html`).
+- **Pipeline:** `UseHsts` + `UseExceptionHandler("/Home/Error")` outside Development, `UseHttpsRedirection`, `UseStaticFiles`, `UseRouting`, `UseAuthentication`, `UseAuthorization`, `MapDefaultControllerRoute()`; aliases `/version` (JSON with version info), `/static` (redirect to `/index.html`), `/rock` and `/queen` (redirects to filtered lists).
 
 ### [appsettings.json](AppMvc/appsettings.json)
 `ApplicationSecrets:SecretStorage`, `DatabaseConnections` (`DefaultDataUser`, `MigrationUser`, `UseDataSetWithTag`) and `DataService` (`DataSource`, `WebApiBaseUri`). Connection strings and credentials are kept in secrets.
@@ -129,8 +166,9 @@ AppMvc/
 ### Layout and footer
 `_Layout.cshtml` is the common page frame: favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), three reusable Bootstrap modals, and a footer showing **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user) from `IOptions<EnvironmentOptions>`. No credentials are displayed.
 
-### Paged list
-`GroupController.ListOfGroups(int pagenr)` reads one page of 10 groups with one service call (`pageNumber = pagenr`, `pageSize = 10`; the database does `Skip/Take` and returns the total count too). `ViewModels/ListOfGroups.UpdatePagination(...)` computes the previous/next page numbers (clamped) and the number of numbered links (max 10); the view renders a Bootstrap pagination bar with `asp-route-pagenr` links. Page numbers are zero-based in the URL and 1-based on screen.
+### Paged list and detail page
+- The list is read one page (10 groups) at a time: `pageNumber = pagenr`, `pageSize = 10`; the database applies `Skip/Take` and returns the total count too. `ViewModels/ListOfGroups.UpdatePagination(...)` computes previous/next page numbers (clamped) and the number of numbered links (max 10). Page numbers are zero-based in the URL and 1-based on screen.
+- Each group name links to `GroupController.ViewGroup(Guid id)` (`/Group/ViewGroup/<guid>`), which reads the group with its artists and albums and shows them in a read-only form-style view.
 
 ### Data overview and Seed pages
 - `HomeController.DataSourceInfo()` calls `IAdminService.GuestInfoAsync()` and shows six counters (seeded/unseeded music groups, albums, artists) from the database view `gstusr.vwInfoDb`.
@@ -145,4 +183,4 @@ AppMvc/
 ## 3. Context and next steps
 
 - `AppMvc` and [AppRazor](apprazor-explanations.md) offer the same features on top of the same service layer; they differ in the page model (controllers/views here, Razor Pages there).
-- Next: searching in the list, editing and deleting a group (the read-only fields of the detail view are a natural starting point), and authentication/authorization with the prepared pipeline.
+- Next: deleting and editing groups from the list (the form around the list and the hidden `groupId` field are prepared for selecting an item), and authentication/authorization with the prepared pipeline.

@@ -17,6 +17,9 @@ namespace AppMvc.ViewModels
         public int NextPageNr { get; set; } = 0;
         public int NrVisiblePages { get; set; } = 0;
 
+        //ModelBinding for the form
+        public string SearchFilter { get; set; } = null;
+
         public void UpdatePagination(int nrOfItems)
         {
             //Pagination

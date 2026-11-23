@@ -11,6 +11,7 @@ namespace AppRazor.Pages
         readonly IMusicGroupsService _service = null;
         readonly ILogger<ListOfGroupsModel> _logger = null;
 
+        [BindProperty]
         public bool UseSeeds { get; set; } = true;
         
         public List<IMusicGroup> MusicGroups { get; set; }
@@ -26,13 +27,18 @@ namespace AppRazor.Pages
         public int NextPageNr { get; set; } = 0;
         public int NrVisiblePages { get; set; } = 0;
 
+        //ModelBinding for the form
+        [BindProperty]
+        public string SearchFilter { get; set; } = null;
+
         //will execute on a Get request
-        public async Task<IActionResult> OnGetAsync(int pagenr)
+        public async Task<IActionResult> OnGetAsync(int pagenr, string search)
         {   
             ThisPageNr = pagenr;
+            SearchFilter = search;
 
             //Use the Service
-            var resp = await _service.ReadMusicGroupsAsync(UseSeeds, false, null, ThisPageNr, PageSize);
+            var resp = await _service.ReadMusicGroupsAsync(UseSeeds, false, SearchFilter, ThisPageNr, PageSize);
             MusicGroups = resp.PageItems;
             NrOfGroups = resp.DbItemsCount;
 
@@ -49,6 +55,20 @@ namespace AppRazor.Pages
             PrevPageNr = Math.Max(0, ThisPageNr - 1);
             NextPageNr = Math.Min(NrOfPages - 1, ThisPageNr + 1);
             NrVisiblePages = Math.Min(10, NrOfPages);
+        }
+
+        public async Task<IActionResult> OnPostSearchAsync()
+        {
+            //Use the Service
+            var resp = await _service.ReadMusicGroupsAsync(UseSeeds, false, SearchFilter, ThisPageNr, PageSize);
+            MusicGroups = resp.PageItems;
+            NrOfGroups = resp.DbItemsCount;
+
+            //Pagination
+            UpdatePagination(resp.DbItemsCount);
+
+            //Page is rendered as the postback is part of the form tag
+            return Page();
         }
 
         //Inject services just like in WebApi

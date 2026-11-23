@@ -8,51 +8,70 @@
     <h2 class="pb-2 border-bottom">List of Music bands</h2>
 
     <p>Below are some of the worlds most famous Music bands.</p>
+    <p>The database contains @Model.NrOfGroups music groups with the search criteria</p>
 
-    <div class="row row-cols-1 row-cols-lg-4 align-items-stretch g-4 py-5">
-        <div class="col-md-7 col-lg-10">
-            <div class="row mb-2 text-center">
-                <div class="col-md-12 themed-grid-head-col">Group Name</div>
-            </div>
-
-            <div class="row mb-2 text-center">
-
-                    @if (Model.MusicGroups is not null)
-                    {
-                        @foreach (var item in Model.MusicGroups)
-                        {
-                            <div class="col-md-12 themed-grid-col">
-                                <a asp-page="/ViewGroup" asp-route-id="@item.MusicGroupId">
-                                    @item.Name
-                                </a>
-                            </div>
-                        }
-                        <nav aria-label="Standard pagination example">
-                            <ul class="pagination">
-                                <li class="page-item">
-                                    <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@Model.PrevPageNr" aria-label="Previous">
-                                        <span aria-hidden="true">&laquo;</span>
-                                    </a>
-                                </li>
-                                @for (int i = 0; i < Model.NrVisiblePages; i++)
-                                {
-                                    <li class="page-item">
-                                        <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@i">@(i + 1)</a>
-                                    </li>
-
-                                }
-                                <li class="page-item">
-                                    <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@Model.NextPageNr" aria-label="Next">
-                                        <span aria-hidden="true">&raquo;</span>
-                                    </a>
-                                </li>
-                            </ul>
-                        </nav>
-                    }
-
+    <form method="post" class="needs-validation" novalidate>
+        <label class="form-check-label" for="useSeeds">Use seeded data</label>
+        <input asp-for="UseSeeds" class="form-check-input" type="checkbox" id="useSeeds">
+        <div class="row row-cols-1 row-cols-lg-4 align-items-stretch g-4 py-5">
+            <div class="col-md-7 col-lg-10">
+                <div class="row mb-2 text-center">
+                    <!-- Search filter-->
+                    <div class="row mb-2 text-center">
+                        <div class="col-md-6 ">
+                            <input asp-for="SearchFilter" class="form-control" type="search" placeholder="Search" aria-label="Search">
+                        </div>
+                        <div class="col-md-2 ">
+                            <button asp-page-handler="Search" class="btn btn-outline-success" type="submit">Search</button>
+                        </div>
+                    </div>
                 </div>
+                <div class="row mb-2 text-center">
+                    <!-- This is where selected item id will be stored -->
+                    <input type="hidden" name="groupId" data-seido-selected-item-id-target />
+
+                    <div class="col-md-12 themed-grid-head-col">Group Name</div>
+                </div>
+
+                <div class="row mb-2 text-center">
+
+                        @if (Model.MusicGroups is not null)
+                        {
+                            @foreach (var item in Model.MusicGroups)
+                            {
+                                <div class="col-md-12 themed-grid-col">
+                                    <a asp-page="/ViewGroup" asp-route-id="@item.MusicGroupId">
+                                        @item.Name
+                                    </a>
+                                </div>
+                            }
+                            <nav aria-label="Standard pagination example">
+                                <ul class="pagination">
+                                    <li class="page-item">
+                                        <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@Model.PrevPageNr" asp-route-search="@Model.SearchFilter" aria-label="Previous">
+                                            <span aria-hidden="true">&laquo;</span>
+                                        </a>
+                                    </li>
+                                    @for (int i = 0; i < Model.NrVisiblePages; i++)
+                                    {
+                                        <li class="page-item">
+                                            <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@i" asp-route-search="@Model.SearchFilter">@(i + 1)</a>
+                                        </li>
+
+                                    }
+                                    <li class="page-item">
+                                        <a class="page-link" asp-page="/ListOfGroups" asp-route-pagenr="@Model.NextPageNr" asp-route-search="@Model.SearchFilter" aria-label="Next">
+                                            <span aria-hidden="true">&raquo;</span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </nav>
+                        }
+
+                    </div>
+            </div>
         </div>
-    </div>
+    </form>
 </div>
 
 

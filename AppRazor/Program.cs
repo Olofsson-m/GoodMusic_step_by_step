@@ -73,6 +73,8 @@ app.MapRazorPages();
 //Route aliases
 app.MapGet("/version", (IOptions<VersionOptions> versionOptions) => Results.Json(versionOptions.Value));
 app.MapGet("/static", () => Results.Redirect("/index.html"));
+app.MapGet("/rock", () => Results.Redirect("/ListOfGroups?search=Rock"));
+app.MapGet("/queen", () => Results.Redirect("/ListOfGroups?search=Queen"));
 
 app.Run();
 

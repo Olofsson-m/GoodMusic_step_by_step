@@ -29,13 +29,13 @@ public class GroupController : Controller
     }
 
     #region ListOfGroups handling
-    public async Task<IActionResult> ListOfGroups(int pagenr)
+    public async Task<IActionResult> ListOfGroups(int pagenr, string search)
     {
         //Create the viewModel
-        var vm = new ListOfGroups() { ThisPageNr = pagenr };
+        var vm = new ListOfGroups() { ThisPageNr = pagenr, SearchFilter = search };
 
         //Use the Service
-        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, null, vm.ThisPageNr, vm.PageSize);
+        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
         vm.MusicGroups = _resp.PageItems;
         vm.NrOfGroups = _resp.DbItemsCount;
 
@@ -44,6 +44,22 @@ public class GroupController : Controller
 
         //Render the View
         return View(vm);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SearchGroup(ListOfGroups vm)
+    {
+        //Use the Service
+        var _resp = await _mg_service.ReadMusicGroupsAsync(vm.UseSeeds, false, vm.SearchFilter, vm.ThisPageNr, vm.PageSize);
+        vm.MusicGroups = _resp.PageItems;
+        vm.NrOfGroups = _resp.DbItemsCount;
+
+        //Pagination
+        vm.UpdatePagination(_resp.DbItemsCount);
+
+        //Render the View
+        return View("ListOfGroups", vm);
     }
     #endregion
 

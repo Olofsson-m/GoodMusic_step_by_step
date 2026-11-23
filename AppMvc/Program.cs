@@ -68,6 +68,8 @@ app.MapDefaultControllerRoute(); // enables conventional routing: {controller=Ho
 //Route aliases
 app.MapGet("/version", (IOptions<VersionOptions> versionOptions) => Results.Json(versionOptions.Value));
 app.MapGet("/static", () => Results.Redirect("/index.html"));
+app.MapGet("/rock", () => Results.Redirect("/Group/ListOfGroups?search=Rock"));
+app.MapGet("/queen", () => Results.Redirect("/Group/ListOfGroups?search=Queen"));
 
 app.Run();
 
