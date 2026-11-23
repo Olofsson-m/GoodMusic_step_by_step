@@ -1,0 +1,35 @@
+﻿@page
+@model ListOfGroupsModel
+@{
+    ViewData["Title"] = "List groups";
+}
+<!-- Page List of groups -->
+<div class="container px-4 py-4" id="list-of-groups">
+    <h2 class="pb-2 border-bottom">List of Music bands</h2>
+
+    <p>Below are some of the worlds most famous Music bands.</p>
+
+    <div class="row row-cols-1 row-cols-lg-4 align-items-stretch g-4 py-5">
+        <div class="col-md-7 col-lg-10">
+            <div class="row mb-2 text-center">
+                <div class="col-md-12 themed-grid-head-col">Group Name</div>
+            </div>
+
+            <div class="row mb-2 text-center">
+
+                    @if (Model.MusicGroups is not null)
+                    {
+                        @foreach (var item in Model.MusicGroups)
+                        {
+                            <div class="col-md-12 themed-grid-col">
+                                @item.Name
+                            </div>
+                        }
+                    }
+
+                </div>
+        </div>
+    </div>
+</div>
+
+
