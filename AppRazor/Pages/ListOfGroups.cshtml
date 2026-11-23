@@ -32,7 +32,10 @@
                     <!-- The page the user is on, so we can return to it after a delete -->
                     <input type="hidden" name="pagenr" value="@Model.ThisPageNr" />
 
-                    <div class="col-md-12 themed-grid-head-col">Group Name</div>
+                    <div class="col-md-10 themed-grid-head-col">Group Name</div>
+                    <div class="col-md-2 themed-grid-head-col">
+                        <a asp-page="/Members/EditGroup" class="btn btn-success btn-sm m-1" type="button">New</a>
+                    </div>
                 </div>
 
                 <div class="row mb-2 text-center">
@@ -47,6 +50,8 @@
                                     </a>
                                 </div>
                                     <div class="col-md-2 themed-grid-col">
+                                        <a asp-page="/Members/EditGroup" asp-route-id="@item.MusicGroupId" class="btn btn-secondary btn-sm m-1" type="button">Edit</a>
+
                                         <!-- Button to trigger modal confirmation with modal in the form tag -->
                                         <button type="button" class="btn btn-danger btn-sm m-1" data-bs-toggle="modal" data-bs-target="#delModal"
                                                 data-seido-modal-body="@item.Name is about to be deleted."

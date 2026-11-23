@@ -1,121 +1,172 @@
 # AppRazor explanations
 
 `AppRazor` is the ASP.NET Core **Razor Pages** front-end of the GoodMusic solution (.NET 10). Each page is a `.cshtml` template plus a PageModel class with handlers (`OnGetAsync`, `OnPostAsync`, ...), and pages call the shared service layer (`Services` → `DbRepos` → `DbContext` → database).
-This document describes the code as it is in branch **`11-del-list-item`**, with the emphasis on what this branch adds compared with the previous branch, `10-list-search`. The same feature exists in [AppMvc](appmvc-explanations.md); differences are pointed out.
+This document describes the code as it is in branch **`12-edit-list-item`**, with the emphasis on what this branch adds compared with the previous branch, `11-del-list-item`. The same feature exists in [AppMvc](appmvc-explanations.md); differences are pointed out.
 
 ---
 
-## 1. This branch: Deleting a group from the list with modal confirmation (compared with `10-list-search`)
+## 1. This branch: Editing and creating a music group with the InputModel pattern (compared with `11-del-list-item`)
 
 ### Purpose
-The list could be searched and paged but was read-only. This branch adds a **Del** button on every row. Clicking it opens a **confirmation dialog** ("*&lt;name&gt; is about to be deleted.*" – *Cancel* / *Ok*); only after the user confirms with *Ok* is the group deleted in the database, and the list is shown again on the **same page** with the search filter kept. It is the first page that **changes** data from the list.
+Until now the list pages could show and delete groups. This branch adds **one page that both edits an existing group and creates a new one** – `Members/EditGroup`. The user can change the group's name, genre and established year, and add, edit and delete the group's **artists** and **albums** – and nothing is written to the database until the user presses **Save**. The page is built on the **InputModel pattern**: the whole editable state lives in the form and is posted back and forth, and the server only touches the database at the very end.
 
 ### Differences at a glance
 
 | File | Previous branch | This branch |
 |---|---|---|
-| [Pages/ListOfGroups.cshtml](AppRazor/Pages/ListOfGroups.cshtml) | name column `col-md-12` | name column `col-md-10` + a `col-md-2` column with a **Del button per row**; a **Bootstrap modal (`#delModal`)** placed inside the form; a hidden **`pagenr`** field with the current page |
-| [Pages/ListOfGroups.cshtml.cs](AppRazor/Pages/ListOfGroups.cshtml.cs) | handlers `OnGetAsync`, `OnPostSearchAsync` | + **`OnPostDeleteGroupAsync(Guid groupId, int pagenr)`** (ends with a redirect back to the list) |
+| [Pages/Members/EditGroup.cshtml.cs](AppRazor/Pages/Members/EditGroup.cshtml.cs) | – | **new** PageModel `EditGroupModel`: handlers `OnGetAsync(Guid? id)`, `OnPostAddArtist`, `OnPostEditArtist`, `OnPostDeleteArtist`, `OnPostAddAlbum`, `OnPostEditAlbum`, `OnPostDeleteAlbum`, `OnPostUndoAsync`, `OnPostSaveAsync`; private `SaveAlbums` / `SaveArtists`; nested **InputModel** classes `MusicGroupIM`, `ArtistIM`, `AlbumIM` and the `StatusIM` enum |
+| [Pages/Members/EditGroup.cshtml](AppRazor/Pages/Members/EditGroup.cshtml) | – | **new** edit/create form (route `/Members/EditGroup`) |
+| [Pages/ListOfGroups.cshtml](AppRazor/Pages/ListOfGroups.cshtml) | *Del* button per row | + **New** button in the header and **Edit** button per row (links to `/Members/EditGroup`) |
+| [Pages/ViewGroup.cshtml](AppRazor/Pages/ViewGroup.cshtml) | read-only details | + an **edit icon** next to the heading (link to `/Members/EditGroup?id=<id>`) |
 
-No new JavaScript was needed: the two small helpers that already exist in `wwwroot/js/seido/` (`modals.js` and `select-list-items.js`, loaded by the layout) do the client-side work; this branch is the first to use them. Service and repository code are unchanged – `IMusicGroupsService.DeleteMusicGroupAsync(Guid)` already existed.
+The service and repository layers are unchanged – create, update and delete methods for music groups, albums and artists already existed. `SeidoHelpers.IsValidPartially(...)` and `PopulateSelectList<TEnum>()` (in `SeidoHelpers/`) are used here for the first time, and `select-list-items.js` and Bootstrap's collapse component do the client-side work. The page lives in the **`Members`** folder – the place intended for pages that will later require a signed-in user.
 
-### How it works – step by step
+### The idea: the InputModel pattern
 
-```
- 1. User clicks [Del] on a row                         (button type="button" – does NOT submit)
-      ├─ Bootstrap opens #delModal                     (data-bs-toggle="modal" data-bs-target="#delModal")
-      ├─ select-list-items.js  copies the row's id into the hidden input   <input type="hidden" name="groupId" data-seido-selected-item-id-target>
-      └─ modals.js (on "show.bs.modal") sets the modal text from the button's data-seido-modal-body
- 2. Modal shows "<name> is about to be deleted."   [Cancel] [Ok]
-      ├─ Cancel / × / Esc  → modal closes, nothing is sent
-      └─ Ok  (button type="submit" formaction="/ListOfGroups?handler=DeleteGroup")  → the surrounding <form> is POSTed
- 3. POST /ListOfGroups?handler=DeleteGroup   fields: groupId, pagenr, UseSeeds, SearchFilter, __RequestVerificationToken
-      ▼
-    ListOfGroupsModel.OnPostDeleteGroupAsync(Guid groupId, int pagenr)       (token validated automatically)
-      │ [BindProperty] has filled UseSeeds and SearchFilter from the form
-      │ await _service.DeleteMusicGroupAsync(groupId)
-      │ count what is left → clamp pagenr to the last existing page
-      ▼
-    302 redirect → GET /ListOfGroups?pagenr=<same page>&search=<same filter>   (Post/Redirect/Get)
-      ▼
-    OnGetAsync(pagenr, search)       the list, on the same page, without the deleted group
-```
+A page that edits a *graph* of objects (a group with several artists and albums) has a problem: each user action – add an artist, rename an album, delete a row – should not hit the database, because the user may still press *Undo* or leave. The pattern used here solves this **without server-side session state**:
 
-### The row button
-```cshtml
-<button type="button" class="btn btn-danger btn-sm m-1" data-bs-toggle="modal" data-bs-target="#delModal"
-        data-seido-modal-body="@item.Name is about to be deleted."
-        data-seido-selected-item-id="@item.MusicGroupId">
-    Del
-</button>
-```
-- **`type="button"`** – the button never submits the form; its only job is to open the dialog. All rows share **one** modal (`#delModal`); what differs per row is carried in `data-*` attributes.
-- **`data-bs-toggle` / `data-bs-target`** – Bootstrap's declarative API: a click opens the element with id `delModal`.
-- **`data-seido-modal-body`** – the text to put in the dialog for *this* row. Razor HTML-encodes `@item.Name` inside the attribute, and `modals.js` writes it with `textContent` (not `innerHTML`), so a group name can not inject markup.
-- **`data-seido-selected-item-id`** – the id of the row's group (`MusicGroupId`), picked up by `select-list-items.js`.
+1. **InputModel classes** (`MusicGroupIM`, `ArtistIM`, `AlbumIM`) are small classes that hold *only* the editable properties of the real model, plus validation attributes and a `StatusIM` flag. They are what the form binds to.
+2. **Every input of the InputModel is in the form.** Values the user cannot edit directly (ids, status, current name/year of each artist and album) are written as **hidden fields** (`<input type="hidden" …>`). The comment in the code says it: *"EVERY property must be bound to an `<input>` tag in the `<form>`"*.
+3. **Every button posts the whole form.** Razor Pages rebuilds the entire InputModel from the posted fields (`[BindProperty]`), the handler changes it **in memory** (adds a row, marks a row deleted, …) and renders the same page again with the changed model. The browser always holds the complete current state.
+4. **`Save`** is the only handler that reads the flags and writes to the database; **`Undo`** discards the in-memory changes by re-reading the group from the database.
 
-### The two JavaScript helpers (existing files, now in use)
-- **`select-list-items.js`** – at load it adds a `click` listener to every element that has `data-seido-selected-item-id`. When clicked, it copies that value into **every** `input[data-seido-selected-item-id-target]`, i.e. the hidden field `<input type="hidden" name="groupId" data-seido-selected-item-id-target />` that sits in the form. That is how the server later learns *which* group was chosen. (The Del buttons are rendered by the server, so they exist when the script runs.)
-- **`modals.js`** – at load it adds a `show.bs.modal` listener to every `.modal.fade`. When a modal is about to show, it reads `event.relatedTarget` (the button that triggered it) and sets the modal's title, body, *Cancel* text and *Ok* text from `data-seido-modal-title/-body/-cancel/-ok` – only those that are present are changed, the others keep the modal's own text. It finds the buttons by class: `.btn-secondary` = *Cancel*, `.btn-primary` = *Ok* (the Ok button has both `btn-primary` and `btn-danger`). It also supports an AJAX variant (`data-seido-modal-post-url`), which this page does not use.
-
-Because the order of the events is *click → select-list-items copies the id → Bootstrap shows the modal → modals.js sets the text*, the hidden field already holds the right id when the user presses *Ok*.
-
-### The modal markup – inside the form
-```cshtml
-<div class="modal fade" id="delModal" tabindex="-1" aria-labelledby="softModalLabel" aria-hidden="true">
-  <div class="modal-dialog"><div class="modal-content">
-    <div class="modal-header"><h5 class="modal-title text-danger" id="softModalLabel">Confirm deletion</h5>
-         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
-    <div class="modal-body">Hello from modal</div>        <!-- replaced by data-seido-modal-body -->
-    <div class="modal-footer">
-      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-      <button type="submit" asp-page-handler="DeleteGroup" class="btn btn-primary btn-danger">Ok</button>
-    </div>
-  </div></div>
-</div>
-```
-- The comment in the page says it: *"Modal in the form tag"*. Since the modal is written **inside** the `<form>`, its *Ok* submit button submits that form. That is why `groupId`, `UseSeeds`, `SearchFilter` and the antiforgery token (all fields of the form) are posted without any extra code.
-- **`asp-page-handler="DeleteGroup"` on the Ok button** produces `formaction="/ListOfGroups?handler=DeleteGroup"`; Razor Pages then runs the handler `OnPostDeleteGroup[Async]`. The *Search* button of the same form uses `asp-page-handler="Search"`. One form, several handlers.
-- *Cancel*, the × button and the Esc key close the dialog (`data-bs-dismiss="modal"`); nothing is submitted.
-- Unlike AppMvc, the layout of this application contains no other modals; `#delModal` is the only `.modal.fade` on the page.
-
-### The handler
+#### The `StatusIM` flag – what will happen to an item at Save
 ```csharp
-public async Task<IActionResult> OnPostDeleteGroupAsync(Guid groupId, int pagenr)
+public enum StatusIM { Unknown, Unchanged, Inserted, Modified, Deleted }
+```
+| Status | Set by | At *Save* |
+|---|---|---|
+| `Unchanged` | the constructor that copies a database object into the InputModel | nothing |
+| `Inserted` | `OnPostAddArtist` / `OnPostAddAlbum` (and `OnGetAsync` without id for the group itself) | created in the database |
+| `Modified` | `OnPostEditArtist` / `OnPostEditAlbum` (only if the item was not `Inserted`) | updated in the database |
+| `Deleted` | `OnPostDeleteArtist` / `OnPostDeleteAlbum` | deleted from the database |
+
+Deleted rows are **kept in the list** and merely hidden in the page (`d-none`). That is deliberate: the posted lists are bound by index (`Artists[0]`, `Artists[1]` …), and model binding of lists needs the indexes to stay contiguous, so removing an element in the middle would shift or lose items.
+
+### The PageModel – `EditGroupModel`
+```csharp
+public class EditGroupModel : PageModel
 {
-    await _service.DeleteMusicGroupAsync(groupId);
+    [BindProperty] public MusicGroupIM MusicGroupInput { get; set; }
+    [BindProperty] public string PageHeader { get; set; }                  // kept between posts in a hidden field
+    public List<SelectListItem> GenreItems { get; set; } = new List<SelectListItem>().PopulateSelectList<MusicGenre>();
+    public ModelValidationResult ValidationResult { get; set; } = new ModelValidationResult(false, null, null);
 
-    //Count what is left, so we never redirect to a page that no longer exists
-    var resp = await _service.ReadMusicGroupsAsync(UseSeeds, false, SearchFilter, 0, 1);
-    int lastPageNr = Math.Max(0, (int)Math.Ceiling((double)resp.DbItemsCount / PageSize) - 1);
-    pagenr = Math.Clamp(pagenr, 0, lastPageNr);
-
-    //Post/Redirect/Get
-    return RedirectToPage("/ListOfGroups", new { pagenr, search = SearchFilter });
+    // handlers …
+    // nested types: StatusIM, ArtistIM, AlbumIM, MusicGroupIM
 }
 ```
-- **Two sources of input:** `Guid groupId` and `int pagenr` are *handler parameters* bound from the form fields `groupId` (the hidden input filled by `select-list-items.js`) and `pagenr` (a second hidden field holding **the page the user is on**: `<input type="hidden" name="pagenr" value="@Model.ThisPageNr" />`, added next to the `groupId` field); `UseSeeds` and `SearchFilter` are `[BindProperty]` properties of the PageModel, filled from the other form fields before the handler runs. The page number travels in a field named `pagenr` – the same name as in the list's query string – so the search handler is unaffected.
-- **Handler naming:** `OnPostDeleteGroupAsync` ↔ `asp-page-handler="DeleteGroup"` (the `On<Verb>` prefix and `Async` suffix are not part of the handler name).
-- **POST only:** `OnPost…` handlers answer POST requests; a delete is never triggered by a link. A plain GET to `/ListOfGroups?handler=DeleteGroup` does not delete anything – it simply runs `OnGetAsync` and shows the list.
-- **Antiforgery:** Razor Pages validates the token on every POST automatically; the form tag helper adds the token field. A POST without a valid token is rejected with `400`, which blocks cross-site request forgery. (AppMvc needs an explicit `[ValidateAntiForgeryToken]` for the same protection.)
-- **Post/Redirect/Get (PRG):** instead of rendering the list directly from the POST, the handler answers with an **HTTP 302 redirect** to the ordinary GET list URL (`RedirectToPage` builds `/ListOfGroups?pagenr=N&search=text`). The browser then does a normal GET, so the address bar shows the list URL, and **a refresh repeats only that harmless GET – the delete is not submitted again** (previously a refresh re-posted the delete of an already deleted id and ended in a `500`). The list itself is produced by the existing `OnGetAsync(int pagenr, string search)`, so the count, rows and page links come from the single code path used by every other visit to the list.
-- **Stays on the same page:** `pagenr` and the search filter are passed on in the redirect, so the user returns to the page they were on, with the filter still in the search box.
-- **Clamping to the last page:** if the deleted item was the only one on the last page, that page no longer exists. The handler therefore counts the remaining groups (a one-row read of page 0 – the repo returns the total `DbItemsCount` with every read), computes `lastPageNr = ceil(count / PageSize) - 1` (at least 0) and uses `Math.Clamp(pagenr, 0, lastPageNr)`. Example (verified): 101 groups, a delete posted with `pagenr=10` → the redirect goes to `pagenr=9`.
+- **`[BindProperty]`** on `MusicGroupInput` and `PageHeader` is what makes Razor Pages rebuild the InputModel from the posted form **before** the handler runs; the handlers then simply work on `MusicGroupInput`. (In AppMvc the same object arrives as an action parameter.) `GenreItems` and `ValidationResult` are not posted.
+- **The InputModel classes are nested** in the PageModel: `MusicGroupIM`, `ArtistIM`, `AlbumIM` and `StatusIM` – the PageModel is handler, view model and home of the InputModel at once. AppMvc has them in `ViewModels/EditGroup.cs`.
+- **`MusicGroupIM`** – `StatusIM`, `MusicGroupId`, `Name` (`[Required]`), `EstablishedYear` (`[YearUpToNow(1900)]` – 1900 up to the current year), `Genre` (`MusicGenre?`, `[Required]`), the lists `Albums` and `Artists`, and the two *"new item" input holders* `NewAlbum` / `NewArtist` (bound to the inline *New* forms). `Genre` is nullable + required on purpose: on a new group no genre is pre-selected and the user must make an active choice.
+- **`ArtistIM` / `AlbumIM`** – `StatusIM`, the id, the current values (`FirstName`, `LastName` / `AlbumName`, `ReleaseYear`) **and a second set of "edit" values** (`editFirstName`, `editLastName` / `editAlbumName`, `editReleaseYear`). The edit values are what the inline edit boxes are bound to; they only become the real values when the user confirms with the row's *Ok* button. This lets each row be edited and confirmed independently.
+- **Three constructors per class** express the data flows: a copy constructor (used when a *New* item is copied into the list), a constructor from the model interface (`IArtist` / `IAlbum` / `IMusicGroup`: database → InputModel, status `Unchanged`, edit values = values) and the parameterless one (for the model binder).
+- **`UpdateModel(model)` / `CreateCUdto()`** – the way back: `UpdateModel` copies InputModel values onto a model read from the database (for update), `CreateCUdto()` makes a Create/Update DTO with `Id = null` (for insert).
+- **`GenreItems`** – the `<select>` options, generated from the `MusicGenre` enum by `PopulateSelectList<MusicGenre>()`. They are **not posted**, so the list is rebuilt in the property initializer every time the PageModel is instantiated (before every GET and POST).
 
-### What the repository does
-`MusicGroupsDbRepos.DeleteMusicGroupAsync(Guid id)`:
-1. Finds the group (`Where(MusicGroupId == id)` – a tracked entity).
-2. **Throws `ArgumentException("Item … is not existing")` if there is none.**
-3. `_dbContext.MusicGroups.Remove(item)` and `SaveChangesAsync()` – one SQL `DELETE` in a unit of work.
-4. Returns the removed item in a `ResponseItemDto`.
+### Request flows
 
-How the group's albums and artist links are treated is decided by the relationship rules of the database model (outside this branch). The database user in `DatabaseConnections:DefaultDataUser` must be allowed to delete: with the default `dbo` it is; the lower-privileged `gstusr` and `usr` roles have no `DELETE` right on the data schema.
+```
+(1) Opening the page
+GET /Members/EditGroup?id=<guid>      or      /Members/EditGroup   (no id = create)
+   └─ OnGetAsync(Guid? id)
+        ├─ id given:   ReadMusicGroupAsync(id, flat:false) → MusicGroupInput = new MusicGroupIM(mg.Item)    PageHeader = "Edit details of a music group"
+        └─ no id:      MusicGroupInput = new MusicGroupIM { StatusIM = Inserted, Genre = null }              PageHeader = "Create a new a music group"
+      → Page()   (no database writes)
+
+(2) Any button except Save / Undo      POST /Members/EditGroup?handler=<AddArtist|EditArtist|DeleteArtist|AddAlbum|EditAlbum|DeleteAlbum>
+   whole form ─► [BindProperty] rebuilds MusicGroupInput ─► handler changes it in memory ─► Page()   (no database access)
+
+(3) Undo                               POST /Members/EditGroup?handler=Undo
+   ReadMusicGroupAsync(MusicGroupInput.MusicGroupId) → MusicGroupInput = new MusicGroupIM(mg.Item); ModelState.Clear(); Page()
+
+(4) Save                               POST /Members/EditGroup?handler=Save
+   validate group fields → (create group if Inserted) → SaveAlbums → SaveArtists → update the group → 302 redirect
+```
+- **Handler selection:** each button has `asp-page-handler="<Name>"`, which renders `formaction="/Members/EditGroup?handler=<Name>"`; Razor Pages runs `OnPost<Name>[Async]`. `AddArtist` ↔ `OnPostAddArtist`, `Save` ↔ `OnPostSaveAsync` – handlers that do no I/O are synchronous (`IActionResult`, no suffix), those that call the service are `async` with the `Async` suffix.
+- **Antiforgery:** Razor Pages validates the token on every POST automatically (the form tag helper adds it); a POST without it is rejected with `400` (verified for every edit handler).
+
+### How the client side picks the row – `select-list-items.js`
+Each row's **Edit** and **Del** buttons carry `data-seido-selected-item-id="<artistId or albumId>"`. The page contains two placeholders, `<input type="hidden" name="artistId" data-seido-selected-item-id-target />` and `<input type="hidden" name="albumId" … />`. When a button is clicked, `select-list-items.js` copies its id into **all** target inputs; the form is then submitted by the button (*Del*) and the handler receives the id as a parameter (`OnPostDeleteArtist(Guid artistId)`) – the same mechanism as the delete dialog in the list, here without a modal. For *Edit* the button has `type="button"`: it only toggles a Bootstrap **collapse** panel (`data-bs-toggle="collapse" data-bs-target="#collapseEditArtist_<id>"`) that contains the edit boxes and the row's *Ok* button; the id is copied at the same time, so the *Ok* (`EditArtist`) knows which row to confirm. The *New* buttons just toggle the collapse panels `#collapseAddArtist` / `#collapseAddAlbum`.
+
+### The handlers in detail
+
+**`OnGetAsync(Guid? id)`** – shown in flow (1). `Guid?` makes the id optional (bound from the query string), which is what lets one page serve both *edit* and *create*: *New* in the list links to `/Members/EditGroup` (no id), *Edit* to `/Members/EditGroup?id=<guid>`.
+
+**`OnPostAddArtist` / `OnPostAddAlbum`**
+```csharp
+string[] keys = { "MusicGroupInput.NewArtist.FirstName", "MusicGroupInput.NewArtist.LastName" };
+if (!ModelState.IsValidPartially(out ModelValidationResult validationResult, keys))
+{ ValidationResult = validationResult; return Page(); }
+
+MusicGroupInput.NewArtist.StatusIM = StatusIM.Inserted;
+MusicGroupInput.NewArtist.ArtistId = Guid.NewGuid();                    // temporary id so the row can be edited/deleted in the form
+MusicGroupInput.Artists.Add(new ArtistIM(MusicGroupInput.NewArtist));
+MusicGroupInput.NewArtist = new ArtistIM();                             // clear the input boxes
+return Page();
+```
+The new item gets a **temporary Guid**; the real id is created by the database layer at Save. The `NewArtist` holder is then cleared so the next artist can be typed.
+
+**`OnPostEditArtist(Guid artistId)` / `OnPostEditAlbum(Guid albumId)`** – finds the row by id, validates only that row's edit fields (`Artists[idx].editFirstName`, …), marks it `Modified` (unless it is `Inserted` – a new item stays `Inserted`) and copies the `edit…` values into the real values.
+
+**`OnPostDeleteArtist` / `OnPostDeleteAlbum`** – sets `StatusIM = Deleted`; the page renders the row with `d-none`.
+
+**`OnPostUndoAsync`** – re-reads the group from the database and rebuilds the InputModel. **`ModelState.Clear()`** is essential here: the tag helpers show the *posted* values (from ModelState) in preference to the model's values, so without clearing the page would still show the discarded edits. For the same reason the page writes explicit `value="@Model.…"` attributes on the hidden and edit inputs – an explicit attribute wins over ModelState, which is how the *changed* in-memory values (new status, copied name) reach the browser after a handler has modified the model.
+
+#### Partial validation – `IsValidPartially`
+The data annotations (`[Required]`, `[Range]`) are checked by the model binder for **the whole posted model, on every post**. On this page that means ModelState holds errors that are irrelevant to the button just pressed – for instance the empty *New artist* boxes are "invalid" while the user presses *Delete* or *Save*. `ModelState.IsValid` would therefore almost always be false. `IsValidPartially(out result, keys)` (in `SeidoHelpers/SeidoHelpers.cs`) filters the ModelState errors to the **keys named by the handler** – the fields that belong to that button – and returns their messages in `ModelValidationResult`. Each handler names its own keys: `OnPostAddArtist` → the new artist's fields, `OnPostEditAlbum` → `Albums[idx].editAlbumName` / `editReleaseYear`, `OnPostSaveAsync` → the group's name, year and genre. The page lists the messages in red alert boxes (server-side fallback) and each input has an `asp-validation-for` span for client-side jQuery validation (`_ValidationScriptsPartial` in the `script` section).
+
+Verified messages: *"You must provide a first name"* / *"…a last name"* (add or edit an artist), *"You must enter an album name"*, *"You must provide a year between 1900 and 2026"* (the upper limit is the current year), *"You must provide a group name"*, *"You must select a music genre"*.
+
+#### `OnPostSaveAsync`
+```csharp
+if (!ModelState.IsValidPartially(out validationResult, { Name, EstablishedYear, Genre })) { … return Page(); }
+
+if (MusicGroupInput.StatusIM == StatusIM.Inserted)                          // create mode
+{
+    var newMg = await _mg_service.CreateMusicGroupAsync(MusicGroupInput.CreateCUdto());
+    MusicGroupInput.MusicGroupId = newMg.Item.MusicGroupId;                 // the id is created by the database layer
+}
+await SaveAlbums();                         // deletes → creates → updates
+var mg = await SaveArtists();               // deletes → creates → updates; returns the freshly read group
+mg = MusicGroupInput.UpdateModel(mg);       // the group's own fields
+await _mg_service.UpdateMusicGroupAsync(new MusicGroupCUdto(mg));
+
+return Inserted ? RedirectToPage("/ListOfGroups") : RedirectToPage("/ViewGroup", new { id = MusicGroupInput.MusicGroupId });
+```
+- Order matters: **deleted** items are removed first, then **new** items are created (albums get `MusicGroupId`; artists get `MusicGroupsId = [group id]` – artists and groups are many-to-many), then **modified** items are updated from a **fresh read** of the group, and finally the group itself is updated.
+- A successful Save ends with a redirect (Post/Redirect/Get): after *creating*, to the list; after *editing*, to the group's detail page. `RedirectToPage` builds the URLs, including the `id` query value.
+- The database calls are separate service calls, each committed on its own – there is **no single transaction** around Save, so a failure half-way would leave a partly saved group.
+
+### Verified behaviour (against the running application)
+| Test | Result |
+|---|---|
+| Open edit for an existing group | 54 form fields, all items `Unchanged`, genre list *Blues/Jazz/Metal* + selected *Rock* + *Pick one* |
+| *Add artist* with empty names | 200, two validation messages; nothing added |
+| *Add artist* "Zed Testson" | new row with status `Inserted`, the *new* boxes cleared |
+| *Del* on that new row | status `Deleted`, row hidden |
+| *Edit artist* (first name → "Changed") | value changed, status `Modified`; an empty name gives *"You must provide a first name"* |
+| *Add album* with year 1899 or 2027 | both rejected: *"You must provide a year between 1900 and 2026"*; 1900 and 2026 (the current year) are accepted |
+| *Save* with name removed | *"You must provide a group name"*, nothing saved |
+| *Undo* | the group is reloaded from the database (2 artists again) |
+| Real edit: rename group, add an album, rename an artist → *Save* | `302` to `/ViewGroup?id=…`; the changes are visible; then reverted the same way – the group was back to its original state |
+| Any edit POST without the antiforgery token | `400` |
+
+(The same flows were run against AppMvc with identical results, plus a *create new group* run there.)
+
+### Known limitations (found while testing)
+- **A new item that is added and then deleted before Save causes an error:** `OnPostDeleteArtist` / `OnPostDeleteAlbum` set `Deleted` even for an `Inserted` item, and `Save` then tries to delete the *temporary* Guid from the database → `ArgumentException` → HTTP **500** (verified; the request fails before any change is written; outside Development the developer exception page is shown). The fix is to *remove* such an item from the list instead of marking it `Deleted`.
+- **Year validation (minor caveat):** valid years run from 1900 up to the current year, implemented by the attribute `[YearUpToNow(1900)]` (in `SeidoHelpers/SeidoHelpers.cs`) on the group's `EstablishedYear` and on both album year fields. Attribute arguments must be compile-time constants, so the attribute derives from `RangeAttribute` and passes `DateTime.Now.Year` to the base constructor; the error text is the template *"You must provide a year between {1} and {2}"*. Because it is still a `RangeAttribute`, the jQuery client-side validation works unchanged (the inputs get `data-val-range-min="1900"` and `data-val-range-max="2026"`). The upper limit is fixed when the attribute is first used, i.e. once per application start (a long-running site would pick up a new year at its next restart).
+- **Created groups do not show up in the list:** a new group is saved as *unseeded* (`Seeded = false`), while the list only shows seeded groups (`UseSeeds = true`); it can be found by unchecking *Use seeded data* and searching, and is counted as "unseeded" in the data overview.
+- **Unknown ids:** `ReadMusicGroupAsync` throws for an id that does not exist (HTTP 500), and the `.First(a => a.ArtistId == artistId)` calls in the handlers throw if a posted id is not in the posted list.
+- **No concurrency check and no authorization:** two users editing the same group overwrite each other (last Save wins), and anyone who can reach the page can edit – the `Members` folder is where authorization will be applied.
+- The edit page has no *Cancel* link; leaving the page simply discards the in-memory changes. The file has an unused `using Newtonsoft.Json`.
 
 ### Trying it
-1. Open **Famous groups**, optionally search for a group (e.g. `Floyd`).
-2. Click **Del** on a row: the dialog says "*&lt;name&gt; is about to be deleted.*". Press **Cancel** – nothing happens.
-3. Go to page *2* of the list, click **Del** again and press **Ok** – the row disappears, you are still on page *2* (the URL is the normal list URL, e.g. `/ListOfGroups?pagenr=1`), the count drops by one and the search filter is still in the search box. Pressing F5 now just reloads the list.
-4. Check **Data overview**: the number of seeded music groups is one lower.
+1. Open **Famous groups** and click **Edit** on a row (or the pencil icon on a group's detail page).
+2. Change the name, press **New** under *Artists*, enter a first and last name and press **Ok** – the artist appears in the list; **Edit** and **Del** work on each row. Do the same for albums.
+3. Press the **save** icon in the heading: you are returned to the group's detail page with the changes. Press the **undo** icon instead to discard the unsaved changes.
+4. Press **New** in the list header to create a group: fill name, genre and year, add artists/albums and press **save**.
 
 ---
 
@@ -133,11 +184,13 @@ AppRazor/
 │   ├── _ViewStart.cshtml         Sets _Layout
 │   ├── Index.cshtml (+ .cs)      Welcome page          -> /
 │   ├── DataSourceInfo.cshtml (+ .cs)  Data overview    -> /DataSourceInfo
-│   ├── ListOfGroups.cshtml (+ .cs)    Search, paged list, delete with modal -> /ListOfGroups?pagenr=N&search=text
+│   ├── ListOfGroups.cshtml (+ .cs)    Search, paged list, delete with modal, New/Edit buttons -> /ListOfGroups?pagenr=N&search=text
 │   ├── ViewGroup.cshtml (+ .cs)       Group details    -> /ViewGroup?id=<guid>
-│   ├── Members/Seed.cshtml (+ .cs)    Seed form        -> /Members/Seed
+│   ├── Members/
+│   │   ├── Seed.cshtml (+ .cs)        Seed form        -> /Members/Seed
+│   │   └── EditGroup.cshtml (+ .cs)   Edit / create a group (InputModels) -> /Members/EditGroup[?id=<guid>]
 │   └── Shared/                   _Layout.cshtml, _LoginPartial.cshtml (empty placeholder), _ValidationScriptsPartial.cshtml
-├── SeidoHelpers/SeidoHelpers.cs  Extension methods for model validation and enum select lists
+├── SeidoHelpers/SeidoHelpers.cs  IsValidPartially(...), PopulateSelectList<TEnum>()
 └── wwwroot/                      index.html, css/ (incl. grid.css), js/seido/ (modals.js, select-list-items.js), favicon_io/, lib/ (Bootstrap, jQuery, jquery-validation)
 ```
 
@@ -150,20 +203,17 @@ AppRazor/
 
 ### Layout, imports and footer
 - `_ViewImports.cshtml` enables tag helpers (`asp-page`, `asp-page-handler`, `asp-route-*`, `asp-append-version`, the form tag helper with antiforgery token) in all pages and layouts, and lets pages refer to models without full namespaces.
-- `_Layout.cshtml` is the common page frame (title *AppMusicRazor*): favicons, Bootstrap and extra CSS, an SVG icon sprite, header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), footer and the scripts (Bootstrap, jQuery, `modals.js`, `select-list-items.js`). The *Static* link is a plain `href="~/index.html"` since it points to a static file.
+- `_Layout.cshtml` is the common page frame (title *AppMusicRazor*): favicons, Bootstrap and extra CSS, an SVG icon sprite (including the *edit*, *undo* and *save* icons used on the edit page), header menu (*Home*, *Static*, *Data overview*, *Famous groups*, *Seed*), footer and the scripts (Bootstrap, jQuery, `modals.js`, `select-list-items.js`). The *Static* link is a plain `href="~/index.html"` since it points to a static file.
 - The footer shows **Environment**, **Secret** (source and id) and **Data** (active data set tag and default data user), read from `IOptions<EnvironmentOptions>`. No credentials are displayed.
 
-### List, search and detail pages
-- The list is read one page (10 groups) at a time (`pageNumber = pagenr`, `pageSize = 10`; the database applies `Skip/Take` and returns the total count too); the private `UpdatePagination(...)` computes the page links. Page numbers are zero-based in the URL and 1-based on screen.
-- The search form posts `SearchFilter` and `UseSeeds` to `OnPostSearchAsync` (`[BindProperty]` on both properties); page links are GET links that carry `pagenr` and `search`. The filter matches name, genre or established year.
+### List, search, delete and detail pages
+- The list is read one page (10 groups) at a time (`pageNumber = pagenr`, `pageSize = 10`; the database applies `Skip/Take` and returns the total count too). Page numbers are zero-based in the URL and 1-based on screen. The search form posts `SearchFilter` and `UseSeeds` to `OnPostSearchAsync` (`[BindProperty]` on both properties); page links are GET links that carry `pagenr` and `search`.
+- *Del* opens a confirmation modal and posts `OnPostDeleteGroupAsync`, which deletes and then redirects back to the same page of the (filtered) list.
 - Each group name links to `ViewGroupModel.OnGetAsync(Guid id)` (`/ViewGroup?id=<guid>`), which shows the group with its artists and albums read-only.
 
 ### Data overview and Seed pages
 - `DataSourceInfoModel.OnGetAsync()` calls `IAdminService.GuestInfoAsync()` and shows six counters (seeded/unseeded music groups, albums, artists) from the database view `gstusr.vwInfoDb`.
-- `Pages/Members/Seed.cshtml` + `.cs` (`SeedModel`): `OnGetAsync()` loads `NrOfGroups`; `OnPostAsync()` validates the form, optionally removes all data, calls `SeedAsync(n)` (`SeedGenerator` + `app-seeds.json`: `n` groups with 2–4 albums and 2–4 artists each) and redirects to the data overview.
-
-### Other
-- `SeidoHelpers.cs`: `ModelStateDictionary.IsValidPartially(...)` and `List<SelectListItem>.PopulateSelectList<TEnum>()`.
+- `Pages/Members/Seed.cshtml` + `.cs` (`SeedModel`): `OnGetAsync()` loads `NrOfGroups`; `OnPostAsync()` validates the form, optionally removes all data, calls `SeedAsync(n)` (`SeedGenerator` + `app-seeds.json`) and redirects to the data overview.
 
 ---
 
@@ -171,11 +221,13 @@ AppRazor/
 
 | | AppMvc | AppRazor |
 |---|---|---|
-| Delete action | `[HttpPost] [ValidateAntiForgeryToken] DeleteGroup(Guid groupId, int pagenr, ListOfGroups vm)` → `RedirectToAction` | `OnPostDeleteGroupAsync(Guid groupId, int pagenr)` → `RedirectToPage` |
-| Ok button target | `asp-controller` + `asp-action` → `formaction="/Group/DeleteGroup"` | `asp-page-handler="DeleteGroup"` → `formaction="/ListOfGroups?handler=DeleteGroup"` |
-| Binding of the filter | whole view model bound from the form | `[BindProperty]` on `UseSeeds` and `SearchFilter` |
-| Antiforgery | explicit attribute on the action | automatic for Razor Pages POST |
-| GET on the delete URL | `405` | `200` (list shown, nothing deleted) |
-| Modals on the page | `#delModal` + the three modals from the layout | only `#delModal` |
+| Edit page | `GroupController.EditGroup` + 8 POST actions, `ViewModels/EditGroup.cs`, `Views/Group/EditGroup.cshtml` | `Members/EditGroup.cshtml` + `EditGroupModel` with 9 handlers |
+| InputModel classes | in `ViewModels/EditGroup.cs` | nested in the PageModel |
+| How the form reaches the code | the view model is an **action parameter** (`Save(EditGroup vm)`) | `[BindProperty]` on `MusicGroupInput` and `PageHeader` |
+| Button target | `asp-controller="Group" asp-action="Save"` → `/Group/Save` | `asp-page-handler="Save"` → `/Members/EditGroup?handler=Save` |
+| Antiforgery | explicit `[ValidateAntiForgeryToken]` on every POST action | automatic for Razor Pages POST |
+| Redirect after Save | `RedirectToAction("ListOfGroups")` / `("ViewGroup", new { id })` | `RedirectToPage("/ListOfGroups")` / `("/ViewGroup", new { id })` |
+| Optional id | `EditGroup(Guid? id)` – route segment or query | `OnGetAsync(Guid? id)` – query string |
+| URL | `/Group/EditGroup[/<guid>]` | `/Members/EditGroup[?id=<guid>]` |
 
-Next: creating and editing groups (with their albums and artists), and authentication/authorization with the prepared pipeline – deletion in particular should later be restricted to authorised users.
+Next: authentication and authorization with the prepared pipeline – creating, editing and deleting should be restricted to authorised users (the `Members` folder is the natural unit) – and hardening the edit page (the limitations above).

@@ -1,9 +1,21 @@
 ﻿using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.Rendering;
+using System.ComponentModel.DataAnnotations;
 
 namespace AppMvc.SeidoHelpers
 {
     #region Seido Helpers for Model Validation
+    //Allows a year from minYear up to and including the current year.
+    //Derives from RangeAttribute so client side validation (data-val-range-*) works as before.
+    //The upper limit is read when the attribute is first used, i.e. once per application start.
+    public class YearUpToNowAttribute : RangeAttribute
+    {
+        public YearUpToNowAttribute(int minYear) : base(minYear, DateTime.Now.Year)
+        {
+            ErrorMessage = "You must provide a year between {1} and {2}";
+        }
+    }
+
     public record ModelValidationResult
     (
         bool HasErrors,
