@@ -35,6 +35,19 @@ builder.Services.AddDefaultIdentity<User>(options => {
 }).AddEntityFrameworkStores<DbContext.MainDbContext>();
 
 
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.LoginPath = "/Account/Login";
+    options.AccessDeniedPath = "/Account/Login";
+    options.LogoutPath = "/Account/Logout";
+    options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+    options.SlidingExpiration = true;
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; // Allow both HTTP and HTTPS in development
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.Name = "GoodMusicAuth";
+});
+
 #region Injecting a dependency service to read MusicWebApi
 builder.Services.AddHttpClient(name: "MusicWebApi", configureClient: options =>
 {

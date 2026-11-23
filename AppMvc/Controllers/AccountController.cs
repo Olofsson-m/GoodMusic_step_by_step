@@ -154,5 +154,65 @@ public class AccountController : Controller
     {
         return View("RegisterConfirmation");
     }
+
+    [HttpGet]
+    public IActionResult Login(Login vm)
+    {
+        vm.LoginCreds = new Login.LoginIM();
+        return View("Login", vm);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> LoginOk(Login vm)
+    {
+        var returnUrl = Url.Content("~/");
+
+        if (!ModelState.IsValidPartially(out ModelValidationResult validationResult))
+        {
+            vm.ValidationResult = validationResult;
+            return View("Login", vm);
+        }
+
+        // This doesn't count login failures towards account lockout
+        // To enable password failures to trigger account lockout, set lockoutOnFailure: true
+        var result = await _signInManager.PasswordSignInAsync(vm.LoginCreds.Email, vm.LoginCreds.Password, vm.LoginCreds.RememberMe, lockoutOnFailure: false);
+        if (result.Succeeded)
+        {
+            _logger.LogInformation("Login succeeded");
+            return LocalRedirect("/");
+        }
+        if (result.RequiresTwoFactor)
+        {
+            return RedirectToPage("./LoginWith2fa", new { ReturnUrl = returnUrl, RememberMe = vm.LoginCreds.RememberMe });
+        }
+        if (result.IsLockedOut)
+        {
+            _logger.LogWarning("User account locked out.");
+            return RedirectToPage("./Lockout");
+        }
+
+        //Failed Login
+        vm.ValidationResult = new ModelValidationResult(true, new List<string>() { "Invalid login attempt." }, null);
+        return View("Login", vm);
+    }
+
+    //A GET (typing the URL or following a link) must not sign the user out
+    [HttpGet]
+    [ActionName("Logout")]
+    public IActionResult LogoutGet()
+    {
+        return LocalRedirect(Url.Content("~/"));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Logout()
+    {
+        var returnUrl = Url.Content("~/");
+
+        await _signInManager.SignOutAsync();
+        return LocalRedirect(returnUrl);
+    }
 }
 

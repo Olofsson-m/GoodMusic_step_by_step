@@ -1,8 +1,11 @@
 ﻿<!doctype html>
 @using Configuration.Options
+@using Microsoft.AspNetCore.Identity
 @using Microsoft.Extensions.Options
+@using Models.Authorization
 @inject IConfiguration configuration;
 @inject IOptions<EnvironmentOptions> envOptions;
+@inject UserManager<User> userManager;
 @{}
 
 <html lang="en" data-bs-theme="auto">
@@ -87,9 +90,25 @@
                 <li class="nav-item"><a asp-area="" asp-controller="Home" asp-action="DataSourceInfo" class="nav-link" aria-current="overview">Data overview</a></li>
                 <li class="nav-item"><a asp-area="" asp-controller="Group" asp-action="ListOfGroups" class="nav-link" aria-current="list-of-groups">Famous groups</a></li>
 
-                <li class="nav-item"><a asp-area="" asp-controller="Seed" asp-action="Seed" class="nav-link">Seed</a></li>
+                @if (User.Identity.IsAuthenticated)
+                {
+                    <li class="nav-item"><a asp-area="" asp-controller="Seed" asp-action="Seed" class="nav-link">Seed</a></li>
+                }
 
-                <li class="nav-item"><a asp-area="" asp-controller="Account" asp-action="Register" class="nav-link" aria-current="register">Register</a></li>
+                @if (!User.Identity.IsAuthenticated)
+                {
+                    <li class="nav-item"><a asp-area="" asp-controller="Account" asp-action="Login" class="nav-link">Login</a></li>
+                    <li class="nav-item"><a asp-area="" asp-controller="Account" asp-action="Register" class="nav-link" aria-current="register">Register</a></li>
+                }
+                else
+                {
+                    var usr = await userManager.GetUserAsync(User);
+                    <li class="nav-item">
+                        <form asp-area="" asp-controller="Account" asp-action="Logout" method="post" class="d-inline">
+                            <button type="submit" class="nav-link">@usr.FirstName Logout</button>
+                        </form>
+                    </li>
+                }                  
             </ul>
 
         </header>

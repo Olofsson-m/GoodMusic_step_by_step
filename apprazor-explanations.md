@@ -1,8 +1,8 @@
-# AppRazor – Branch `15-sec-registration`
+# AppRazor – Branch `16-sec-authentication`
 
-This branch adds **user registration with e-mail confirmation** to AppRazor. A visitor can open a registration page, create an account in the ASP.NET Core Identity tables, and receive a confirmation e-mail. The e-mail is not sent over SMTP. It is written as an `.eml` file to a `TempMail` folder, so the flow can be tried without a mail server.
+This branch lets a registered user **log in and log out** with ASP.NET Core Identity. After a successful login the browser holds an authentication cookie, and the menu changes to show who is logged in. Nothing is protected by it yet: it identifies the user, but no page requires a login.
 
-Everything below is compared with the previous branch (`14-sec-foundation`), where Identity was configured but no user could be created through the application.
+Everything below is compared with the previous branch (`15-sec-registration`), where a user could register but there was no login or logout.
 
 ---
 
@@ -10,145 +10,167 @@ Everything below is compared with the previous branch (`14-sec-foundation`), whe
 
 | Area | Previous branch | This branch |
 |---|---|---|
-| `User` (shared `Models` layer) | Only the `IdentityUser<Guid>` columns | Adds `FirstName` and `LastName` |
-| Database schema | Identity tables without name columns | `AspNetUsers` has `FirstName` and `LastName` (migration `miInitial` regenerated) |
-| E-mail | None | `Services/EmailService` implements `IEmailSender`, writes `.eml` files to `<AppRazor>/TempMail/` |
-| `Program.cs` | Identity only | Also registers `IEmailSender` → `EmailService` (transient) |
-| Pages | `Index`, `ListOfGroups`, `ViewGroup`, `Members/…` | New folder `Pages/Account` with `Register`, `RegisterConfirmation`, `ConfirmEmail` |
-| Layout | – | New **Register** menu item (`asp-page="/Account/Register"`) |
-
-Not changed: login, logout, `[Authorize]`. All existing pages are still open to anonymous visitors.
+| Login | None (a new user was signed in only by registering) | New page `Pages/Account/Login` (`LoginModel`) |
+| Logout | None | New page `Pages/Account/Logout` (`LogoutModel`) |
+| `Program.cs` | Identity only | `ConfigureApplicationCookie(...)` sets login/logout paths, lifetime and cookie flags |
+| `Pages/Shared/_LoginPartial.cshtml` | Missing | Empty file added |
+| Layout | Static *Seed* and *Register* links | Menu depends on `User.Identity.IsAuthenticated`, shows the user's first name |
 
 ---
 
-## 2. The registration flow
+## 2. The authentication cookie
+
+`AddDefaultIdentity<User>(...)` (unchanged) already registers cookie authentication. This branch tunes the cookie in `Program.cs`:
+
+```csharp
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.LoginPath = "/Account/Login";          // where an [Authorize] redirect would go
+    options.AccessDeniedPath = "/Account/Login";
+    options.LogoutPath = "/Account/Logout";
+    options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+    options.SlidingExpiration = true;              // the 60 minutes restart while the user is active
+    options.Cookie.HttpOnly = true;                // not readable from JavaScript
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;  // works on http in development
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.Name = "GoodMusicAuth";
+});
+```
+
+Without this, Identity would redirect to its default `/Identity/Account/Login`. The paths now point at the app's own pages. They only matter once something uses `[Authorize]`, which comes in a later branch.
+
+---
+
+## 3. The login flow
 
 ```
-GET  /Account/Register                         → Register page (empty UserIM)
-POST /Account/Register                         → validate → CreateAsync → send e-mail → …
-GET  /Account/ConfirmEmail?userId=…&code=…     → ConfirmEmailAsync → ConfirmEmail page
-GET  /Account/RegisterConfirmation             → "check your e-mail" page (only used when confirmation is required)
+GET  /Account/Login   → Login page with an empty LoginIM
+POST /Account/Login   → validate → PasswordSignInAsync → redirect "/" or re-render with an error
+POST /Account/Logout → SignOutAsync → redirect "/"   (GET /Account/Logout only redirects to "/")
 ```
 
-### 2.1 `Register` page model
+### 3.1 `LoginModel`
 
-The page model has a `[BindProperty] UserIM RegUser` and a `ModelValidationResult ValidationResult`. `UserIM` is a nested InputModel class, which is the same pattern as `EditGroup`. It contains only the posted properties:
+The page model has a `[BindProperty] LoginIM LoginCreds` and a `ModelValidationResult ValidationResult`. `LoginIM` is a nested InputModel class that holds exactly what the form posts:
 
 | Property | Validation |
 |---|---|
-| `FirstName`, `LastName` | `[Required]` |
 | `Email` | `[Required]`, `[EmailAddress]` |
-| `Password` | `[Required]`, `[StringLength(100, MinimumLength = 6)]`, `[DataType(Password)]` |
-| `ConfirmPassword` | `[Required]`, `[Compare("Password")]` |
+| `Password` | `[Required]`, `[DataType(Password)]` |
+| `RememberMe` | – |
 
-`UserIM.UpdateModel(User)` copies first name, last name and e-mail to a `User`. The password is deliberately not copied. It is passed separately to Identity, which hashes it.
+It receives `SignInManager<User>` and a logger.
 
-The constructor receives `UserManager<User>`, `IUserStore<User>`, `SignInManager<User>`, `IEmailSender` and a logger. It fails fast if the user store does not support e-mail.
+### 3.2 `OnPostAsync`
 
-**`OnPostAsync`:**
+1. `ModelState.IsValidPartially(...)` checks `LoginIM`. On errors, the page is shown again with the messages.
+2. `SignInManager.PasswordSignInAsync(email, password, RememberMe, lockoutOnFailure: false)` looks the user up (the user name is the e-mail, set at registration), verifies the password hash and, if it matches, issues the cookie.
+3. The result is handled in this order:
+   - `Succeeded` → `LocalRedirect("/")`.
+   - `RequiresTwoFactor` → redirect to a `LoginWith2fa` page (does not exist; 2FA is not enabled).
+   - `IsLockedOut` → redirect to a `Lockout` page (does not exist; `lockoutOnFailure` is `false`, so lockout never happens).
+   - otherwise → the page is shown again with the single message **"Invalid login attempt."**
 
-1. `ModelState.IsValidPartially(...)` checks the `UserIM` rules. On errors the page is re-rendered with the messages in `ValidationResult`.
-2. `RegUser.UpdateModel(new User())` builds the entity. The user name and the e-mail are set through the user and e-mail stores (user name = e-mail address).
-3. `UserManager.CreateAsync(user, password)` creates the user. Identity validates the password rules and that the user name is unique. Its errors (for example *Username '…' is already taken*) are shown through the same `ValidationResult` mechanism.
-4. A confirmation link is built and sent with `IEmailSender`.
-5. What happens next depends on `Identity:SignIn:RequireConfirmedAccount`:
-   - `true` → `RedirectToPage("RegisterConfirmation")`.
-   - `false` (the current development setting) → `SignInManager.SignInAsync(user)` and redirect to `/`. The user is signed in immediately.
+An unknown e-mail and a wrong password give the same message, so the page does not reveal which e-mails are registered.
 
-### 2.2 The confirmation link
+`RememberMe` makes the cookie persistent, so it survives closing the browser. Without it, it is a session cookie.
 
-This is the standard Identity format:
+### 3.3 `LogoutModel`
 
-```
-token = UserManager.GenerateEmailConfirmationTokenAsync(user)
-code  = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(token))
-link  = Url.Page("/Account/ConfirmEmail", values: new { userId, code, returnUrl }, protocol: Request.Scheme)
-```
+`OnPostAsync` calls `SignInManager.SignOutAsync()` and redirects to `/`. Razor Pages validate the antiforgery token on POST by default. `OnGet` does **not** sign out. It only redirects to `/`, so a typed URL, a link or an image cannot log the user out. `Logout.cshtml` is an empty page that is never shown, because both handlers redirect.
 
-The user id is a plain query parameter. The e-mail body is HTML with `<a href='{callbackUrl}'>clicking here</a>`.
+---
 
-### 2.3 `ConfirmEmail` page model
+## 4. The layout and `_LoginPartial`
 
-`OnGet(Guid userId, string code, Uri returnUrl)` finds the user, decodes the Base64Url `code` and calls `UserManager.ConfirmEmailAsync(user, token)`.
-- Success → the page shows "Your email is now confirmed".
-- Failure → the Identity errors are put in `ValidationResult`, another confirmation e-mail is sent, and the same page is shown ("Invalid token. We had a problem with you email confirmation. Another confirmation email has been sent.").
+`_Layout.cshtml` injects `UserManager<User>` and builds the menu from the login state:
 
-### 2.4 `RegisterConfirmation`
-
-A static page with a thank-you message and an empty page model. It is the target when `RequireConfirmedAccount` is `true`.
-
-### 2.5 `EmailService`
+| State | Menu |
+|---|---|
+| Anonymous | *Login*, *Register* |
+| Logged in | *Seed*, and a *"<FirstName> Logout"* button |
 
 ```csharp
-public class EmailService : IEmailSender
+@if (User.Identity.IsAuthenticated)  { /* Seed */ }
+@if (!User.Identity.IsAuthenticated) { /* Login, Register */ }
+else
 {
-    public async Task SendEmailAsync(string email, string subject, string htmlMessage)
-    // builds a MimeMessage (From test@test.com, HTML body)
-    // saves it as <ContentRoot>/TempMail/<guid>.eml
+    var usr = await userManager.GetUserAsync(User);
+    <form asp-page="/Account/Logout" method="post" class="d-inline">
+        <button type="submit" class="nav-link">@usr.FirstName Logout</button>
+    </form>
 }
 ```
 
-It lives in the shared `Services` project (MailKit/MimeKit 4.18.1), so AppRazor and AppMvc use the same implementation. The class also contains a real SMTP method, `SendEmail`, with placeholder server and credentials. It is not called. Switching to real mail later means calling it (with real settings) instead of saving to the pickup folder.
+The logout is a small form with a button styled as `nav-link`, so it can send a POST. The form tag helper adds the antiforgery token.
+
+`GetUserAsync` reads the user from the database on every page view, to get `FirstName`.
+
+`_LoginPartial.cshtml` is empty. The default Identity UI pages (mapped by `AddDefaultIdentity`) render a partial with this name, so without the file they failed with a 500. The app's own menu does not use it.
+
+**Build fix applied while analysing this branch:** the layout used `UserManager<User>` and `User` without importing the `User` namespace, so the project did not compile. `@using Models.Authorization` was added to [_Layout.cshtml](/Users/Martin/Development/projects/WebDevelopment_Dec_2026/GoodMusic_step_by_step/AppRazor/Pages/Shared/_Layout.cshtml).
 
 ---
 
-## 3. Files in AppRazor touched by this branch
+## 5. Files in AppRazor touched by this branch
 
 ```
 AppRazor/
-├─ Pages/Account/Register.cshtml(.cs)              NEW  form + RegisterModel + UserIM
-├─ Pages/Account/RegisterConfirmation.cshtml(.cs)  NEW
-├─ Pages/Account/ConfirmEmail.cshtml(.cs)          NEW
-├─ Pages/Shared/_Layout.cshtml                     Register menu item
-├─ Program.cs                                      IEmailSender registration
-└─ TempMail/                                       created at run-time, holds the .eml files
+├─ Pages/Account/Login.cshtml(.cs)      NEW  form + LoginModel + LoginIM
+├─ Pages/Account/Logout.cshtml(.cs)     NEW  signs out and redirects
+├─ Pages/Shared/_LoginPartial.cshtml    NEW  empty
+├─ Pages/Shared/_Layout.cshtml          injects UserManager, state-dependent menu (+ using line)
+└─ Program.cs                           ConfigureApplicationCookie(...)
 ```
 
 ---
 
-## 4. Verified behaviour
+## 6. Verified behaviour
 
-The solution builds with 0 errors. Both apps were run against the SQL Server container, and the flow was exercised over HTTP:
+The solution builds with 0 errors (after the `using` fix). The app was run against the SQL Server container and tested over HTTP:
 
 | Test | Result |
 |---|---|
-| `GET /Account/Register` | 200, form with an antiforgery token |
-| POST with empty or invalid fields | 200, field messages ("The FirstName field is required", "…not a valid e-mail address", …) |
-| POST with a 3-character password | 200, "The Password must be at least 6 and at max 100 characters long." |
-| Valid POST | 302 → `/`; a user is inserted into `AspNetUsers`; one `.eml` file appears in `TempMail` |
-| Same e-mail again | 200, "Username '…' is already taken." |
-| Click the e-mail link | 200, "Thank you. Your email is now confirmed" |
-| Click the same link a second time | Still 200 "confirmed". Identity's confirmation token is not consumed by a successful confirmation |
-| Link with a tampered `code` | 200, "Invalid token…", and a new e-mail is written. **The new e-mail contains the same tampered `code`** (see limitation 2) |
-| `/Account/ConfirmEmail` without `code` | **500** (`ArgumentNullException` in `Base64UrlDecode`) |
-| Valid POST **without** an antiforgery token | **400, no user is created** (Razor Pages validate the token by default, the form tag helper emits it) |
+| Register a new user | 302 to `/`, cookie `GoodMusicAuth` set, menu shows *Lena Logout* |
+| `GET /Account/Logout` | 302 to `/`, user **stays logged in** |
+| POST to `/Account/Logout` without a token | 400, user stays logged in |
+| POST to `/Account/Logout` with the token (menu button) | 302 to `/`, menu shows *Login* and *Register* again |
+| Login with empty fields | 200, "The Email field is required." and "The Password field is required." |
+| Login with a malformed e-mail | 200, "The Email field is not a valid e-mail address." |
+| Wrong password / unknown user | 200, "Invalid login attempt." |
+| Correct credentials | 302 to `/`, menu shows *Seed* and *Lena Logout* |
+| Cookie flags | `path=/; samesite=lax; httponly` |
+| `/Identity/Account/Login` and `/Identity/Account/Register` | **200**, the default Identity UI now renders |
+| `/Members/Seed` and `/ListOfGroups` anonymously | **200**, same as when logged in |
+| POST to `/Account/Login` **without** an antiforgery token | **400, no login** |
+| POST to `/Account/Login` with the token | 302 to `/` |
+| `GET /Account/Login` | 200, one form, no "TEMPLATE" text |
 
 ---
 
-## 5. Limitations to be aware of
+## 7. Limitations to be aware of
 
-1. **The "send another e-mail" branch of `ConfirmEmail` re-sends the old code.** It generates `codeNew` but builds the link from `code`, so the new e-mail has the same invalid link. Using `codeNew` in the link fixes it.
-2. **Missing parameters give an unhandled 500.** `ConfirmEmail` does not guard against a missing `code` or an unknown `userId`, where `FindByIdAsync` returns `null`.
-3. **`RegisterConfirmation` is not reached today.** It is only used when `RequireConfirmedAccount` is `true`. The current setting is `false`, so users are signed in right after registering and the page was not exercised.
-4. **Small leftovers in the code:**
-   - The unused `GetEmailStore()` method and a duplicate of its check in the constructor.
-   - The unused `returnUrl` parameter of `OnGetAsync`.
-   - Unused `using` lines.
-   - `ConfirmEmail` is in the namespace `AppRazor.Pages.Account` and `Register` in `AppRazor.Pages`.
-5. **Development-only Identity settings**: relaxed password rules and no required confirmation (set in `Program.cs` on the previous branch).
-6. There is no login, logout or authorization yet. Registering signs the user in with a cookie, but nothing in the UI reflects it and no page checks it.
-
----
-
-## 6. Trying it
-
-1. Make sure the database has been rebuilt with the new migration (`_scripts/database-rebuild-all.sh sql-music sqlserver docker dbo ../AppRazor`, then run `initDatabase.sql`).
-2. `dotnet run` in `AppRazor`, click **Register**, fill in the form.
-3. Open `AppRazor/TempMail/*.eml`, and open the link in it.
-4. Check `AspNetUsers`: `EmailConfirmed` goes from `0` to `1` after the link is clicked.
+1. **Nothing is protected.** There is no `[Authorize]`. The *Seed* link is hidden from anonymous users, but `/Members/Seed` still works for them when typed in.
+2. **`returnUrl` is ignored.** Both success paths redirect to `/`, so a user sent to the login page from a protected page is not returned to it.
+3. **A second, unused login exists.** The default Identity UI is reachable at `/Identity/Account/Login` and `/Identity/Account/Register`. It works, but it bypasses the app's own forms, validation and e-mail service flow.
+4. **Lockout is off** (`lockoutOnFailure: false`), so passwords can be guessed without limit.
+5. **A stale cookie breaks the menu.** If the cookie is valid but the user no longer exists (for example after a database rebuild), `GetUserAsync` returns `null` and `usr.FirstName` throws. This follows from the code, and was not triggered in the test.
+6. **Leftovers in the code:**
+   - Many unused `using` lines in `LoginModel` and `LogoutModel`, and the unused `ReturnUrl` comment.
+   - The empty `Logout.cshtml` and `_LoginPartial.cshtml`.
+7. The login page is still reachable when already logged in.
 
 ---
 
-## 7. Next steps
+## 8. Trying it
 
-Login and logout (`SignInManager.PasswordSignInAsync`), then `[Authorize]` and roles on the pages that change data.
+1. `dotnet run` in `AppRazor` and open **Register**. Create a user (or use one from the previous branch).
+2. Click *Logout*, then *Login*, and sign in. The menu shows your first name and *Seed*.
+3. Open the browser developer tools: the cookie `GoodMusicAuth` is `HttpOnly` and `SameSite=Lax`.
+4. Try a wrong password and an unknown e-mail. Both show "Invalid login attempt."
+
+---
+
+## 9. Next steps
+
+Protect pages with `[Authorize]` (the login and access-denied paths above will then take effect), honour `returnUrl`, and add roles.
