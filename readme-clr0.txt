@@ -1,3 +1,5 @@
+AppMvc and AppRazor are now complete as public ASP.NET webapplications
+
 To create the AppMvc and AppRazor
 All applications are using the same software stack
 
